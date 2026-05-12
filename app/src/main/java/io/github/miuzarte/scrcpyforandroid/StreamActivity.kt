@@ -5,9 +5,11 @@ import android.app.PictureInPictureUiState
 import android.app.RemoteAction
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.drawable.Icon
 import android.os.Bundle
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.PictureInPictureParamsCompat.Builder
 import androidx.core.content.ContextCompat
 import androidx.core.pip.BasicPictureInPicture
@@ -41,12 +43,23 @@ class StreamActivity : FragmentActivity() {
 
     // 每次 进出全屏/进出画中画
     // 都会重建 activity
+    private val requestAudioPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* 用户可能拒绝，不阻断流程 */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         currentActivityRef = WeakReference(this)
         AppScreenOn.register(window)
 
         registerPipActionReceiver()
+
+        // 请求麦克风权限（用于 Audio IN）
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestAudioPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+        }
 
         // 声明要画中画
         basicPip.setEnabled(true)

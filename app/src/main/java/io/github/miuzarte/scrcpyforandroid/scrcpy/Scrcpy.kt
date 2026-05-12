@@ -2,6 +2,7 @@ package io.github.miuzarte.scrcpyforandroid.scrcpy
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.util.Log
 import android.view.KeyEvent
@@ -12,6 +13,7 @@ import io.github.miuzarte.scrcpyforandroid.constants.Defaults
 import io.github.miuzarte.scrcpyforandroid.nativecore.AdbSocketStream
 import io.github.miuzarte.scrcpyforandroid.nativecore.NativeAdbService
 import io.github.miuzarte.scrcpyforandroid.nativecore.ScrcpyAudioPlayer
+import io.github.miuzarte.scrcpyforandroid.nativecore.AudioInjector
 import io.github.miuzarte.scrcpyforandroid.scrcpy.Shared.CameraFacing
 import io.github.miuzarte.scrcpyforandroid.scrcpy.Shared.Codec
 import io.github.miuzarte.scrcpyforandroid.scrcpy.Shared.EncoderType
@@ -111,10 +113,14 @@ class Scrcpy(
     @Volatile
     private var aacRecorder: NativeAacRecorder? = null
 
+    @Volatile
+    private var audioInjector: AudioInjector? = null
+
     val listings = Listings()
 
     companion object {
         private const val TAG = "Scrcpy"
+        private const val AUDIO_PORT = 7008
 
         const val DEFAULT_SERVER_ASSET = "bin/scrcpy-server-v3.3.4"
         const val DEFAULT_SERVER_ASSET_NAME = "scrcpy-server-v3.3.4"
@@ -213,6 +219,23 @@ class Scrcpy(
             wavRecorder = null
             aacRecorder?.release()
             aacRecorder = null
+
+            // Audio IN 先启动（在 Audio OUT 之前，避免音频硬件冲突）
+            audioInjector?.stop()
+            audioInjector = null
+            if (options.audioInjection) {
+                val injectorHost = currentTarget?.host
+                if (injectorHost != null) {
+                    Log.i(TAG, "start(): starting AudioInjector BEFORE audio player")
+                    val injector = AudioInjector()
+                    audioInjector = injector
+                    injector.start(injectorHost)
+                } else {
+                    Log.w(TAG, "start(): AudioInjector skipped, host is null")
+                }
+            }
+
+            // Audio OUT（在 Audio IN 之后启动）
             if (info.audioCodecId != 0 && options.audioPlayback) {
                 Log.i(
                     TAG,
@@ -296,6 +319,8 @@ class Scrcpy(
 
         } catch (e: Exception) {
             Log.e(TAG, "start(): Failed to start scrcpy session", e)
+            audioInjector?.stop()
+            audioInjector = null
             audioPlayer?.release()
             audioPlayer = null
             runCatching { mp4Recorder?.release() }
@@ -319,6 +344,8 @@ class Scrcpy(
         Log.i(TAG, "stop(): Stopping scrcpy session")
 
         return@withContext try {
+            audioInjector?.stop()
+            audioInjector = null
             session.clearVideoConsumer()
             session.clearAudioConsumer()
             mp4Recorder?.release()

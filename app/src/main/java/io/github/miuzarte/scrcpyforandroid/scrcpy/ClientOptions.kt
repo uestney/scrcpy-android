@@ -134,6 +134,8 @@ data class ClientOptions(
     // --no-playback
     // --no-audio-playback
     var audioPlayback: Boolean = true,
+    // --audio-injection (custom: mic → device)
+    var audioInjection: Boolean = true,
     // --turn-screen-off
     var turnScreenOff: Boolean = false,
 
