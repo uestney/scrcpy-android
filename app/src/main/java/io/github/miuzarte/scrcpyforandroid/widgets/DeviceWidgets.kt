@@ -1427,6 +1427,7 @@ internal fun QuickConnectCard(
     onFocusLost: (() -> Unit)? = null,
     onConnect: () -> Unit,
     onAddDevice: () -> Unit,
+    onMirror: () -> Unit = {},
     enabled: Boolean = true,
 ) {
     val haptic = LocalHapticFeedback.current
@@ -1481,6 +1482,13 @@ internal fun QuickConnectCard(
                 TextButton(
                     text = stringResource(R.string.button_direct_connect),
                     onClick = onConnect,
+                    modifier = Modifier.weight(1f),
+                    enabled = enabled,
+                    colors = ButtonDefaults.textButtonColorsPrimary(),
+                )
+                TextButton(
+                    text = "Mirror",
+                    onClick = onMirror,
                     modifier = Modifier.weight(1f),
                     enabled = enabled,
                     colors = ButtonDefaults.textButtonColorsPrimary(),

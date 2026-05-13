@@ -34,6 +34,12 @@
         </activity>
 
         <activity
+            android:name=".MirrorActivity"
+            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize"
+            android:exported="false"
+            android:screenOrientation="fullSensor" />
+
+        <activity
             android:name=".StreamActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize"
             android:exported="false"

@@ -35,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import io.github.miuzarte.scrcpyforandroid.MirrorActivity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
@@ -408,6 +409,7 @@ internal fun DeviceTabPage(
 
     @Composable
     fun QuickConnectSection() {
+        val context = LocalContext.current
         QuickConnectCard(
             input = quickConnectInputTemp,
             onValueChange = { viewModel.setQuickConnectInput(it) },
@@ -423,6 +425,11 @@ internal fun DeviceTabPage(
                 val target = ConnectionTarget.unmarshalFrom(quickConnectInputTemp)
                     ?: return@QuickConnectCard
                 viewModel.onQuickConnect(target)
+            },
+            onMirror = {
+                val target = ConnectionTarget.unmarshalFrom(quickConnectInputTemp)
+                    ?: return@QuickConnectCard
+                context.startActivity(MirrorActivity.createIntent(context, target.host))
             },
         )
     }
