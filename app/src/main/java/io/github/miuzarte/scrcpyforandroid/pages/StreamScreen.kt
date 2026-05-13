@@ -36,7 +36,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.github.miuzarte.scrcpyforandroid.StreamActivity
-import io.github.miuzarte.scrcpyforandroid.nativecore.MicTestUtil
 import io.github.miuzarte.scrcpyforandroid.scrcpy.Scrcpy
 import io.github.miuzarte.scrcpyforandroid.services.AppRuntime
 import io.github.miuzarte.scrcpyforandroid.services.LocalSnackbarController
@@ -133,86 +132,10 @@ fun StreamScreen(activity: StreamActivity) {
                 },
             )
 
-            // 录音测试面板（叠在画面上方）
-            MicTestPanel()
         }
     }
 }
 
-@Composable
-fun MicTestPanel() {
-    var recording by remember { mutableStateOf(false) }
-    var recorded   by remember { mutableStateOf<ByteArray?>(null) }
-    var playing    by remember { mutableStateOf(false) }
-    var status     by remember { mutableStateOf("") }
-    val scope      = rememberCoroutineScope()
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        verticalArrangement = Arrangement.Top,
-        horizontalAlignment = Alignment.End
-    ) {
-        Column(
-            modifier = Modifier
-                .background(Color(0xCC000000), shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-                .padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text("Mic Test", color = Color.White, fontSize = 14.sp)
-            Spacer(Modifier.height(4.dp))
-            if (status.isNotBlank()) {
-                Text(status, color = Color.Yellow, fontSize = 11.sp, maxLines = 3)
-                Spacer(Modifier.height(4.dp))
-            }
-            Row {
-                Button(
-                    onClick = {
-                        if (recording) return@Button
-                        recording = true
-                        status = "Recording 3s..."
-                        scope.launch {
-                            val data = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                MicTestUtil.record()
-                            }
-                            recording = false
-                            if (data != null) {
-                                recorded = data
-                                status = "OK! ${data.size} bytes"
-                            } else {
-                                status = "FAIL: ${MicTestUtil.lastError}"
-                            }
-                        }
-                    },
-                    enabled = !recording && !playing,
-                    colors = ButtonDefaults.buttonColors(containerColor = if (recording) Color.Red else Color(0xFF4CAF50))
-                ) {
-                    Text(if (recording) "..." else "Record", color = Color.White, fontSize = 12.sp)
-                }
-                Spacer(Modifier.width(8.dp))
-                Button(
-                    onClick = {
-                        val data = recorded ?: return@Button
-                        playing = true
-                        status = "Playing..."
-                        scope.launch {
-                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                MicTestUtil.play(data)
-                            }
-                            playing = false
-                            status = "Play done"
-                        }
-                    },
-                    enabled = recorded != null && !recording && !playing,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3))
-                ) {
-                    Text(if (playing) "..." else "Play", color = Color.White, fontSize = 12.sp)
-                }
-            }
-        }
-    }
-}
 
 @Composable
 fun FullscreenControlRoute(
