@@ -896,28 +896,6 @@ fun FullscreenControlPage(
                 )
             }
         }
-
-        // UDP/TCP 模式状态指示器（始终显示）
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(end = UiSpacing.ContentVertical, top = UiSpacing.ContentVertical)
-                .background(
-                    if (session.udpMode) Color(0xFF00AA00) else Color(0xFF0066CC),
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp)
-                )
-                .padding(horizontal = 12.dp, vertical = 6.dp)
-        ) {
-            Text(
-                text = stringResource(
-                    if (session.udpMode) R.string.stream_mode_udp
-                    else R.string.stream_mode_tcp
-                ),
-                color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-            )
-        }
     }
 
     DisposableEffect(Unit) {
