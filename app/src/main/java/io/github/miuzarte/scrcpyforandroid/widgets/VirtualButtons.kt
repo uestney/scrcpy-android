@@ -169,6 +169,12 @@ enum class VirtualButtonAction(
         Icons.Rounded.Apps,
         null
     ),
+    MINIMIZE(
+        "minimize",
+        R.string.vb_return_to_host,
+        Icons.Rounded.PhoneAndroid,
+        null
+    ),
     RECENT_TASKS(
         "recent_tasks",
         R.string.vb_recent_tasks,
@@ -185,12 +191,6 @@ enum class VirtualButtonAction(
         "paste_local_clipboard",
         R.string.vb_paste_clipboard,
         Icons.Rounded.ContentPaste,
-        null
-    ),
-    MINIMIZE(
-        "minimize",
-        R.string.vb_return_to_host,
-        Icons.Rounded.PhoneAndroid,
         null
     );
 }
