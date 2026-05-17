@@ -14,7 +14,7 @@ class AudioInjector {
 
     companion object {
         private const val TAG         = "AudioInjector"
-        private const val PORT        = 7008
+        private const val PORT        = 59152
         private const val SAMPLE_RATE = 16000
         private const val CHANNEL_CFG = AudioFormat.CHANNEL_IN_MONO
         private const val AUDIO_FMT   = AudioFormat.ENCODING_PCM_16BIT

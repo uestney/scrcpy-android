@@ -23,7 +23,7 @@ import java.nio.ByteBuffer
  */
 class UdpVideoReceiver(
     private val serverIp: String,
-    private val videoPort: Int = 15004,  // 默认高位端口
+    private val videoPort: Int = 59154,  // 默认高位端口
     private val width: Int = 1280,
     private val height: Int = 720,
 ) {

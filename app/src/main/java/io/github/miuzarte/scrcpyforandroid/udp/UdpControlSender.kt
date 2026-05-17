@@ -18,7 +18,7 @@ import java.net.InetAddress
  */
 class UdpControlSender(
     private val serverIp: String,
-    private val controlPort: Int = 15005,  // 与 ClientOptions 默认值匹配
+    private val controlPort: Int = 59155,  // 与 ClientOptions 默认值匹配
 ) {
     private var socket: DatagramSocket? = null
     private var serverAddress: InetAddress? = null

@@ -215,9 +215,9 @@ data class ClientOptions(
     // UDP 模式：使用 UDP 传输替代 ADB TCP
     var udpMode: Boolean = true,
     // UDP 视频端口（客户端绑定，使用高位端口避免 Android 权限问题）
-    var udpVideoPort: Int = 15004,
+    var udpVideoPort: Int = 59154,
     // UDP 控制端口（客户端绑定）
-    var udpControlPort: Int = 15005,
+    var udpControlPort: Int = 59155,
 ) {
     enum class KeyInjectMode(val string: String) {
         MIXED("mixed"),
