@@ -159,6 +159,10 @@ class ScrcpyOptions(context: Context) : Settings(context, "ScrcpyOptions") {
             booleanPreferencesKey("show_touches"),
             false,
         )
+        val UDP_MODE = Pair(
+            booleanPreferencesKey("udp_mode"),
+            true,  // 默认使用 UDP
+        )
         val FULLSCREEN = Pair(
             booleanPreferencesKey("fullscreen"),
             false,
@@ -505,6 +509,7 @@ class ScrcpyOptions(context: Context) : Settings(context, "ScrcpyOptions") {
         displayId = preferences.read(DISPLAY_ID),
         screenOffTimeout = preferences.read(SCREEN_OFF_TIMEOUT),
         showTouches = preferences.read(SHOW_TOUCHES),
+        udpMode = preferences.read(UDP_MODE),
         fullscreen = preferences.read(FULLSCREEN),
         control = preferences.read(CONTROL),
         videoPlayback = preferences.read(VIDEO_PLAYBACK),
@@ -585,6 +590,7 @@ class ScrcpyOptions(context: Context) : Settings(context, "ScrcpyOptions") {
         displayId = bundle.displayId,
         screenOffTimeout = Tick(bundle.screenOffTimeout),
         showTouches = bundle.showTouches,
+        udpMode = bundle.udpMode,
         fullscreen = bundle.fullscreen,
         control = bundle.control,
         videoPlayback = bundle.videoPlayback,

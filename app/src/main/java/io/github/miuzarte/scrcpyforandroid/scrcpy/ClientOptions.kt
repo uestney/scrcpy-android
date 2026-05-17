@@ -212,8 +212,8 @@ data class ClientOptions(
     // --no-vd-system-decorations
     var vdSystemDecorations: Boolean = true, // to server
 
-    // UDP 模式：使用 UDP 传输替代 ADB TCP
-    var udpMode: Boolean = false,
+    // UDP 模式：使用 UDP 传输替代 ADB TCP（默认启用）
+    var udpMode: Boolean = true,
     // UDP 视频端口（服务端发送）
     var udpVideoPort: Int = 5004,
     // UDP 控制端口（服务端监听）
