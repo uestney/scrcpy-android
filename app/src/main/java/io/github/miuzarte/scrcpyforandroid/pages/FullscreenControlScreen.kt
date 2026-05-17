@@ -409,6 +409,11 @@ fun FullscreenControlScreen(
 
     fun handleButtonAction(action: VirtualButtonAction) {
         when (action) {
+            VirtualButtonAction.MINIMIZE -> {
+                // 返回主机：最小化当前全屏控制
+                onBack()
+            }
+
             VirtualButtonAction.RECENT_TASKS -> {
                 showRecentTasksSheet = true
                 if (recentTasks.isEmpty() && !listingsRefreshBusy) {

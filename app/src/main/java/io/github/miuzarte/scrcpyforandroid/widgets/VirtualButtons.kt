@@ -34,6 +34,7 @@ import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Password
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Screenshot
+import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -94,6 +95,12 @@ enum class VirtualButtonAction(
         "more",
         R.string.vb_more,
         MiuixIcons.More,
+        null
+    ),
+    MINIMIZE(
+        "minimize",
+        R.string.vb_return_to_host,
+        Icons.Rounded.PhoneAndroid,
         null
     ),
     HOME(

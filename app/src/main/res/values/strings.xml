@@ -270,6 +270,7 @@
 
     <!-- Virtual Button Actions -->
     <string name="vb_more">More</string>
+    <string name="vb_return_to_host">Return to host</string>
     <string name="vb_home">Home</string>
     <string name="vb_back">Back</string>
     <string name="vb_app_switch">App switch</string>

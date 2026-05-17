@@ -270,6 +270,7 @@
 
     <!-- Virtual Button Actions -->
     <string name="vb_more">更多</string>
+    <string name="vb_return_to_host">返回主机</string>
     <string name="vb_home">主页</string>
     <string name="vb_back">返回</string>
     <string name="vb_app_switch">多任务</string>
