@@ -679,6 +679,17 @@ internal fun ConfigPanel(
             )
         }
 
+        // UDP 模式开关（设备配置页直接显示）
+        SwitchPreference(
+            title = stringResource(R.string.scrcpyopt_udp_mode),
+            summary = stringResource(R.string.scrcpyopt_udp_mode_summary),
+            checked = soBundle.udpMode,
+            onCheckedChange = {
+                soBundle = soBundle.copy(udpMode = it)
+            },
+            enabled = !sessionStarted,
+        )
+
         ArrowPreference(
             title = stringResource(
                 if (!hideSimpleConfigItems) R.string.device_config_more_params
