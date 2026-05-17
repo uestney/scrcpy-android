@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.util.Log
 import android.view.KeyEvent
+import android.view.MotionEvent
 import androidx.core.net.toUri
 import com.github.promeg.pinyinhelper.Pinyin
 import io.github.miuzarte.scrcpyforandroid.NativeCoreFacade
@@ -52,6 +53,16 @@ import kotlin.random.Random
 import kotlin.random.nextUInt
 
 /**
+ * 延迟统计信息
+ */
+data class LatencyStats(
+    val packetCount: Long,
+    val avgLatencyMs: Double,
+    val maxLatencyMs: Double,
+    val timeSinceLastPacketMs: Long
+)
+
+/**
  * High-level scrcpy client API.
  * 
  * Manages scrcpy sessions including:
@@ -76,7 +87,24 @@ class Scrcpy(
     private val lowLatency: Boolean = false,
 ) {
 
-    private val session = Session(::handleRemoteClipboardText)
+    private val session = Session(
+        onRemoteClipboardText = ::handleRemoteClipboardText,
+        onVideoPacketReceived = { readMs ->
+            // 更新延迟统计
+            if (readMs >= 0) {
+                videoPacketCount++
+                lastVideoPacketTime = System.currentTimeMillis()
+                if (readMs > 0) {
+                    totalVideoLatencyMs += readMs
+                    if (readMs > maxVideoLatencyMs) maxVideoLatencyMs = readMs.toDouble()
+                }
+                isConnectionAlive = true
+            } else {
+                // readMs < 0 表示连接断开
+                isConnectionAlive = false
+            }
+        }
+    )
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val clipboardSyncLock = Any()
     private val clipboardManager by lazy {
@@ -98,8 +126,23 @@ class Scrcpy(
     private val _currentSessionState = MutableStateFlow<Session.SessionInfo?>(null)
     val currentSessionState: StateFlow<Session.SessionInfo?> = _currentSessionState.asStateFlow()
 
+    // 延迟统计
+    @Volatile
+    private var lastVideoPacketTime: Long = 0
+    @Volatile
+    private var videoPacketCount: Long = 0
+    @Volatile
+    private var totalVideoLatencyMs: Double = 0.0
+    @Volatile
+    private var maxVideoLatencyMs: Double = 0.0
+    @Volatile
+    private var lastLatencyLogTime: Long = 0
+
     @Volatile
     private var isRunning: Boolean = false
+
+    @Volatile
+    private var isConnectionAlive: Boolean = true  // 连接是否存活
 
     @Volatile
     private var audioPlayer: ScrcpyAudioPlayer? = null
@@ -115,6 +158,13 @@ class Scrcpy(
 
     @Volatile
     private var audioInjector: AudioInjector? = null
+
+    // UDP 模式组件
+    @Volatile
+    private var udpVideoReceiver: io.github.miuzarte.scrcpyforandroid.udp.UdpVideoReceiver? = null
+
+    @Volatile
+    private var udpControlSender: io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender? = null
 
     val listings = Listings()
 
@@ -153,6 +203,17 @@ class Scrcpy(
         if (isRunning) {
             throw IllegalStateException("Scrcpy session is already running")
         }
+
+        // 保存 ClientOptions 用于自动重连
+        io.github.miuzarte.scrcpyforandroid.services.AppRuntime.lastClientOptions = options
+        Log.i(TAG, "start(): Saved ClientOptions for auto-reconnect: host=${options.crop?.toString()}, video=${options.video}")
+
+        // 重置延迟统计
+        videoPacketCount = 0
+        totalVideoLatencyMs = 0.0
+        maxVideoLatencyMs = 0.0
+        lastVideoPacketTime = 0
+        isConnectionAlive = true
 
         Log.i(TAG, "Initializing scrcpy session")
 
@@ -205,9 +266,33 @@ class Scrcpy(
             isRunning = true
             startClipboardSync()
 
+            // UDP 模式：启动控制发送器
+            if (options.udpMode && options.control) {
+                Log.i(TAG, "start(): UDP mode, starting UdpControlSender")
+                val controlSender = io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender(
+                    serverIp = info.host,
+                    controlPort = options.udpControlPort,
+                )
+                udpControlSender = controlSender
+                controlSender.connect()
+            }
+
             // Setup video consumer (notify NativeCoreFacade to setup decoders)
             if (options.video) {
-                NativeCoreFacade.onScrcpySessionStarted(info, session)
+                if (options.udpMode) {
+                    // UDP 模式：启动 UDP 视频接收器
+                    Log.i(TAG, "start(): UDP mode enabled, starting UdpVideoReceiver")
+                    val receiver = io.github.miuzarte.scrcpyforandroid.udp.UdpVideoReceiver(
+                        serverIp = info.host,
+                        videoPort = options.udpVideoPort,
+                        width = info.width,
+                        height = info.height,
+                    )
+                    udpVideoReceiver = receiver
+                    // 稍后在 Surface 准备好后启动接收器
+                } else {
+                    NativeCoreFacade.onScrcpySessionStarted(info, session)
+                }
             }
 
             // Setup audio player
@@ -237,16 +322,20 @@ class Scrcpy(
 
             // Audio OUT（在 Audio IN 之后启动）
             if (info.audioCodecId != 0 && options.audioPlayback) {
-                Log.i(
-                    TAG,
-                    "start(): create audio player codecId=0x${
-                        info.audioCodecId.toUInt().toString(16)
-                    }"
-                )
-                val player = ScrcpyAudioPlayer(appContext, info.audioCodecId, lowLatency)
-                audioPlayer = player
-                session.attachAudioConsumer { packet ->
-                    player.feedPacket(packet.data, packet.ptsUs, packet.isConfig)
+                if (options.udpMode) {
+                    Log.i(TAG, "start(): UDP mode, audio playback not supported yet")
+                } else {
+                    Log.i(
+                        TAG,
+                        "start(): create audio player codecId=0x${
+                            info.audioCodecId.toUInt().toString(16)
+                        }"
+                    )
+                    val player = ScrcpyAudioPlayer(appContext, info.audioCodecId, lowLatency)
+                    audioPlayer = player
+                    session.attachAudioConsumer { packet ->
+                        player.feedPacket(packet.data, packet.ptsUs, packet.isConfig)
+                    }
                 }
             } else {
                 Log.i(TAG, "start(): audio playback disabled for this session")
@@ -343,9 +432,17 @@ class Scrcpy(
 
         Log.i(TAG, "stop(): Stopping scrcpy session")
 
-        return@withContext try {
+        var success = false
+        try {
             audioInjector?.stop()
             audioInjector = null
+
+            // 清理 UDP 组件
+            udpControlSender?.disconnect()
+            udpControlSender = null
+            udpVideoReceiver?.stop()
+            udpVideoReceiver = null
+
             session.clearVideoConsumer()
             session.clearAudioConsumer()
             mp4Recorder?.release()
@@ -358,18 +455,62 @@ class Scrcpy(
             session.stop()
             audioPlayer?.release()
             audioPlayer = null
-            isRunning = false
-            _currentSessionState.value = null
             stopClipboardSync()
             Log.i(TAG, "stop(): Session stopped successfully")
-            true
+            success = true
         } catch (e: Exception) {
             Log.e(TAG, "stop(): Failed to stop session", e)
-            false
+        } finally {
+            // 无论成功失败，都确保清理状态
+            isRunning = false
+            _currentSessionState.value = null
+            Log.i(TAG, "stop(): State cleaned up, success=$success")
         }
+        return@withContext success
     }
 
     fun isStarted(): Boolean = isRunning && session.isStarted()
+
+    /**
+     * 检查连接是否存活（基于最近是否有视频数据到达）
+     * @return true 如果连接正常，false 如果可能已断开
+     */
+    fun isConnectionAlive(): Boolean {
+        if (!isRunning || !session.isStarted()) return false
+        // 如果超过 5 秒没有收到视频包，认为连接可能断开
+        val now = System.currentTimeMillis()
+        val timeSinceLastPacket = if (lastVideoPacketTime > 0) now - lastVideoPacketTime else 0
+        return timeSinceLastPacket < 5000 && isConnectionAlive
+    }
+
+    /**
+     * 获取延迟统计信息
+     */
+    fun getLatencyStats(): LatencyStats {
+        val avgLatency = if (videoPacketCount > 0) totalVideoLatencyMs / videoPacketCount else 0.0
+        return LatencyStats(
+            packetCount = videoPacketCount,
+            avgLatencyMs = avgLatency,
+            maxLatencyMs = maxVideoLatencyMs,
+            timeSinceLastPacketMs = if (lastVideoPacketTime > 0) System.currentTimeMillis() - lastVideoPacketTime else 0
+        )
+    }
+
+    /**
+     * 获取 UDP 控制发送器（用于注入触摸/键盘事件）
+     * 仅在 UDP 模式下可用
+     */
+    fun getUdpControlSender(): io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender? {
+        return udpControlSender
+    }
+
+    /**
+     * 获取 UDP 视频接收器（用于设置 Surface）
+     * 仅在 UDP 模式下可用
+     */
+    fun getUdpVideoReceiver(): io.github.miuzarte.scrcpyforandroid.udp.UdpVideoReceiver? {
+        return udpVideoReceiver
+    }
 
     suspend fun startApp(name: String) = withContext(Dispatchers.IO) {
         session.startApp(name)
@@ -381,12 +522,24 @@ class Scrcpy(
         repeat: Int = 0,
         metaState: Int = 0,
     ) = withContext(Dispatchers.IO) {
-        session.injectKeycode(
-            action = action,
-            keycode = keycode,
-            repeat = repeat,
-            metaState = metaState,
-        )
+        // UDP 模式：使用 UDP 控制发送器
+        val udpSender = udpControlSender
+        if (udpSender != null) {
+            val keyAction = when (action) {
+                KeyEvent.ACTION_DOWN -> io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender.KeyAction.DOWN
+                KeyEvent.ACTION_UP -> io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender.KeyAction.UP
+                else -> io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender.KeyAction.DOWN
+            }
+            udpSender.sendKeyEvent(keyAction, keycode)
+        } else {
+            // 常规 scrcpy 模式
+            session.injectKeycode(
+                action = action,
+                keycode = keycode,
+                repeat = repeat,
+                metaState = metaState,
+            )
+        }
     }
 
     suspend fun injectText(text: String) = withContext(Dispatchers.IO) {
@@ -408,17 +561,31 @@ class Scrcpy(
         actionButton: Int = 0,
         buttons: Int = 0,
     ) = withContext(Dispatchers.IO) {
-        session.injectTouch(
-            action = action,
-            pointerId = pointerId,
-            x = x,
-            y = y,
-            screenWidth = screenWidth,
-            screenHeight = screenHeight,
-            pressure = pressure,
-            actionButton = actionButton,
-            buttons = buttons,
-        )
+        // UDP 模式：使用 UDP 控制发送器
+        val udpSender = udpControlSender
+        if (udpSender != null) {
+            // 将 Android action 映射到 UDP TouchAction
+            val touchAction = when (action) {
+                MotionEvent.ACTION_DOWN -> io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender.TouchAction.DOWN
+                MotionEvent.ACTION_UP -> io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender.TouchAction.UP
+                MotionEvent.ACTION_MOVE -> io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender.TouchAction.MOVE
+                else -> io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender.TouchAction.DOWN
+            }
+            udpSender.sendTouchEvent(touchAction, x, y, pointerId.toInt())
+        } else {
+            // 常规 scrcpy 模式
+            session.injectTouch(
+                action = action,
+                pointerId = pointerId,
+                x = x,
+                y = y,
+                screenWidth = screenWidth,
+                screenHeight = screenHeight,
+                pressure = pressure,
+                actionButton = actionButton,
+                buttons = buttons,
+            )
+        }
     }
 
     suspend fun injectScroll(
@@ -430,20 +597,39 @@ class Scrcpy(
         vScroll: Float,
         buttons: Int,
     ) = withContext(Dispatchers.IO) {
-        session.injectScroll(
-            x = x,
-            y = y,
-            screenWidth = screenWidth,
-            screenHeight = screenHeight,
-            hScroll = hScroll,
-            vScroll = vScroll,
-            buttons = buttons,
-        )
+        // UDP 模式：使用 UDP 控制发送器
+        val udpSender = udpControlSender
+        if (udpSender != null) {
+            udpSender.sendScrollEvent(x, y, hScroll, vScroll)
+        } else {
+            // 常规 scrcpy 模式
+            session.injectScroll(
+                x = x,
+                y = y,
+                screenWidth = screenWidth,
+                screenHeight = screenHeight,
+                hScroll = hScroll,
+                vScroll = vScroll,
+                buttons = buttons,
+            )
+        }
     }
 
     suspend fun pressBackOrTurnScreenOn(action: Int = KeyEvent.ACTION_DOWN) =
         withContext(Dispatchers.IO) {
-            session.pressBackOrTurnScreenOn(action)
+            // UDP 模式：使用 UDP 控制发送器发送返回键（keycode 4）
+            val udpSender = udpControlSender
+            if (udpSender != null) {
+                val keyAction = when (action) {
+                    KeyEvent.ACTION_DOWN -> io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender.KeyAction.DOWN
+                    KeyEvent.ACTION_UP -> io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender.KeyAction.UP
+                    else -> io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender.KeyAction.DOWN
+                }
+                udpSender.sendKeyEvent(keyAction, 4) // KEYCODE_BACK = 4
+            } else {
+                // 常规 scrcpy 模式
+                session.pressBackOrTurnScreenOn(action)
+            }
         }
 
     fun updateCurrentSessionSize(width: Int, height: Int) {
@@ -997,6 +1183,7 @@ class Scrcpy(
      */
     class Session(
         private val onRemoteClipboardText: (String) -> Unit,
+        private val onVideoPacketReceived: (readMs: Long) -> Unit = {},
     ) {
         private val mutex = Mutex()
 
@@ -1018,6 +1205,14 @@ class Scrcpy(
 
         private val serverLogBuffer = ArrayDeque<String>()
 
+        // 延迟统计（Session 内部）
+        @Volatile
+        private var sessionVideoPacketCount: Long = 0
+        @Volatile
+        private var sessionTotalVideoLatencyMs: Double = 0.0
+        @Volatile
+        private var sessionMaxVideoLatencyMs: Double = 0.0
+
         suspend fun start(
             serverCommand: String,
             scid: UInt,
@@ -1033,7 +1228,7 @@ class Scrcpy(
                 Thread.sleep(SERVER_BOOT_DELAY_MS)
 
                 val firstStream = openAbstractSocketWithRetry(socketName, expectDummyByte = true)
-                val firstInput = DataInputStream(BufferedInputStream(firstStream.inputStream))
+                val firstInput = DataInputStream(BufferedInputStream(firstStream.inputStream, 8192))
 
                 var videoStream: AdbSocketStream? = null
                 var videoInput: DataInputStream? = null
@@ -1064,13 +1259,13 @@ class Scrcpy(
                 if (options.video && videoStream == null) {
                     val vStream = openAbstractSocketWithRetry(socketName, expectDummyByte = false)
                     videoStream = vStream
-                    videoInput = DataInputStream(BufferedInputStream(vStream.inputStream))
+                    videoInput = DataInputStream(BufferedInputStream(vStream.inputStream, 8192))
                 }
 
                 if (options.audio && audioStream == null) {
                     val aStream = openAbstractSocketWithRetry(socketName, expectDummyByte = false)
                     audioStream = aStream
-                    audioInput = DataInputStream(BufferedInputStream(aStream.inputStream))
+                    audioInput = DataInputStream(BufferedInputStream(aStream.inputStream, 8192))
                 }
 
                 if (options.control && controlStream == null) {
@@ -1142,7 +1337,7 @@ class Scrcpy(
                 }
                 val controlInput = controlStream?.let { stream ->
                     if (stream === firstStream) firstInput
-                    else DataInputStream(BufferedInputStream(stream.inputStream))
+                    else DataInputStream(BufferedInputStream(stream.inputStream, 8192))
                 }
 
                 val newSession = ActiveSession(
@@ -1162,6 +1357,10 @@ class Scrcpy(
                 if (options.control && options.clipboardAutosync)
                     startControlReaderThread(newSession)
 
+                // 启动控制流心跳线程（防止控制流在后台被系统关闭）
+                if (options.control)
+                    startControlHeartbeatThread(newSession)
+
                 return sessionInfo
             } catch (t: Throwable) {
                 val tail = snapshotServerLogs()
@@ -1180,41 +1379,83 @@ class Scrcpy(
             }
 
             videoReaderThread = thread(start = true, name = "scrcpy-video-reader") {
+                Log.d(TAG, "[VIDEO_READER] Thread started")
+                var packetCount = 0
+                var lastLogTime = System.currentTimeMillis()
+
                 try {
                     while (activeSession === session && !vStream.closed) {
                         try {
+                            val readStart = System.nanoTime()
+
                             val ptsAndFlags = vInput.readLong()
                             val packetSize = vInput.readInt()
                             if (packetSize <= 0) {
+                                Log.w(TAG, "[VIDEO_READER] Invalid packet size: $packetSize")
                                 continue
                             }
 
                             val payload = ByteArray(packetSize)
                             vInput.readFully(payload)
+                            val readEnd = System.nanoTime()
+                            val readMs = (readEnd - readStart) / 1_000_000
 
                             val config = (ptsAndFlags and PACKET_FLAG_CONFIG) != 0L
                             val keyFrame = (ptsAndFlags and PACKET_FLAG_KEY_FRAME) != 0L
                             val ptsUs = ptsAndFlags and PACKET_PTS_MASK
+
+                            // 更新 Session 内部延迟统计
+                            sessionVideoPacketCount++
+                            if (readMs > 0) {
+                                sessionTotalVideoLatencyMs += readMs
+                                if (readMs > sessionMaxVideoLatencyMs) sessionMaxVideoLatencyMs = readMs.toDouble()
+                            }
+
+                            // 通知外部类（用于连接状态检测）
+                            onVideoPacketReceived(readMs)
+
                             val packet = VideoPacket(
                                 data = payload,
                                 ptsUs = ptsUs,
                                 isConfig = config,
                                 isKeyFrame = keyFrame,
                             )
+
+                            val callbackStart = System.nanoTime()
                             videoConsumers.forEach { it(packet) }
+                            val callbackEnd = System.nanoTime()
+
+                            packetCount++
+                            val now = System.currentTimeMillis()
+                            if (now - lastLogTime > 2000 || keyFrame || config) {
+                                val avgLatency = if (sessionVideoPacketCount > 0) sessionTotalVideoLatencyMs / sessionVideoPacketCount else 0.0
+                                Log.i(TAG, "[VIDEO_READER] packet=$packetCount size=$packetSize read=${readMs}ms callback=${(callbackEnd - callbackStart) / 1_000_000}ms keyFrame=$keyFrame config=$config avgLatency=${"%.1f".format(avgLatency)}ms")
+                                lastLogTime = now
+                            }
+
+                            // 检测长时间阻塞
+                            if (readMs > 1000) {
+                                Log.w(TAG, "[VIDEO_READER] Long read delay: ${readMs}ms, possible blocking!")
+                            }
                         } catch (_: EOFException) {
+                            Log.w(TAG, "[VIDEO_READER] EOF received, notifying connection dead")
+                            onVideoPacketReceived(-1)  // -1 表示连接断开
                             break
                         } catch (_: InterruptedException) {
                             if (activeSession !== session || vStream.closed) {
+                                Log.d(TAG, "[VIDEO_READER] Interrupted, exiting: activeSession=${activeSession === session}, closed=${vStream.closed}")
                                 break
                             }
                             Thread.interrupted()
                         } catch (e: Exception) {
-                            Log.w(TAG, "video reader failed", e)
+                            Log.e(TAG, "[VIDEO_READER] Error: ${e.message}", e)
+                            onVideoPacketReceived(-1)  // -1 表示连接断开
                             break
                         }
                     }
                 } finally {
+                    Log.d(TAG, "[VIDEO_READER] Thread exiting, total packets=$packetCount")
+                    onVideoPacketReceived(-1)  // -1 表示连接断开
                 }
             }
         }
@@ -1400,6 +1641,12 @@ class Scrcpy(
             }
             controlReaderThread = null
 
+            if (Thread.currentThread() !== controlHeartbeatThread) {
+                runCatching { controlHeartbeatThread?.interrupt() }
+                runCatching { controlHeartbeatThread?.join(300) }
+            }
+            controlHeartbeatThread = null
+
             runCatching { session.controlStream?.close() }
             runCatching { session.audioStream?.close() }
             runCatching { session.videoStream?.close() }
@@ -1466,6 +1713,31 @@ class Scrcpy(
                         }
                     }
                 } finally {
+                }
+            }
+        }
+
+        @Volatile
+        private var controlHeartbeatThread: Thread? = null
+
+        private fun startControlHeartbeatThread(session: ActiveSession) {
+            val controlWriter = session.controlWriter ?: return
+            controlHeartbeatThread = thread(start = true, name = "scrcpy-control-heartbeat") {
+                Log.d(TAG, "[CONTROL_HEARTBEAT] Thread started")
+                try {
+                    while (activeSession === session && !session.controlStream?.closed!!) {
+                        Thread.sleep(10000) // 每 10 秒发送一次心跳
+                        try {
+                            // 发送一个空的剪贴板同步消息作为心跳（不会影响实际剪贴板内容）
+                            controlWriter.setClipboard("", false)
+                            Log.d(TAG, "[CONTROL_HEARTBEAT] Heartbeat sent")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "[CONTROL_HEARTBEAT] Failed to send heartbeat", e)
+                            break
+                        }
+                    }
+                } finally {
+                    Log.d(TAG, "[CONTROL_HEARTBEAT] Thread exiting")
                 }
             }
         }

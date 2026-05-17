@@ -150,11 +150,99 @@ fun FullscreenControlRoute(
     val asBundle by Storage.appSettings.bundleState.collectAsState()
     val currentSession by scrcpy.currentSessionState.collectAsState()
 
-    LaunchedEffect(currentSession) {
-        if (currentSession == null) {
+    // 自动重连逻辑 - 使用可变变量支持递归调用
+    var handleReconnect: (() -> Unit)? = null
+    handleReconnect = {
+        val lastOptions = AppRuntime.lastClientOptions
+        val isScrcpyRunning = scrcpy.isStarted()
+        val connectionTarget = AppRuntime.currentConnectionTarget
+        android.util.Log.i("StreamScreen", "onReconnectRequested: lastOptions=${lastOptions != null}, scrcpyRunning=$isScrcpyRunning, target=$connectionTarget, enabled=${AppRuntime.autoReconnectEnabled}, attempt=${AppRuntime.currentReconnectAttempt}/${AppRuntime.maxReconnectAttempts}")
+
+        if (lastOptions != null && AppRuntime.autoReconnectEnabled &&
+            AppRuntime.currentReconnectAttempt < AppRuntime.maxReconnectAttempts
+        ) {
+            AppRuntime.currentReconnectAttempt++
+            android.util.Log.i("StreamScreen", "Auto-reconnecting (attempt ${AppRuntime.currentReconnectAttempt}/${AppRuntime.maxReconnectAttempts})")
+
+            kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    // 1. 停止当前 scrcpy session
+                    if (isScrcpyRunning) {
+                        android.util.Log.i("StreamScreen", "Stopping current session...")
+                        scrcpy.stop()
+                        android.util.Log.i("StreamScreen", "Session stopped, waiting for cleanup...")
+                        kotlinx.coroutines.delay(500)
+                    }
+
+                    // 2. 检查并重新建立 ADB 连接（关键修复）
+                    val adbConnected = try {
+                        io.github.miuzarte.scrcpyforandroid.nativecore.NativeAdbService.isConnected()
+                    } catch (e: Exception) {
+                        false
+                    }
+
+                    if (!adbConnected && connectionTarget != null) {
+                        android.util.Log.w("StreamScreen", "ADB not connected, reconnecting to ${connectionTarget.host}:${connectionTarget.port}...")
+                        try {
+                            io.github.miuzarte.scrcpyforandroid.nativecore.NativeAdbService.connect(
+                                host = connectionTarget.host,
+                                port = connectionTarget.port,
+                                timeout = kotlin.time.Duration.parse("10s")
+                            )
+                            android.util.Log.i("StreamScreen", "ADB reconnected successfully")
+                            kotlinx.coroutines.delay(500)
+                        } catch (e: Exception) {
+                            android.util.Log.e("StreamScreen", "Failed to reconnect ADB", e)
+                            throw e
+                        }
+                    } else if (adbConnected) {
+                        android.util.Log.i("StreamScreen", "ADB still connected")
+                    }
+
+                    // 3. 杀掉服务器端可能残留的 scrcpy server 进程
+                    try {
+                        android.util.Log.i("StreamScreen", "Killing any zombie scrcpy server on remote...")
+                        io.github.miuzarte.scrcpyforandroid.nativecore.NativeAdbService.shell("pkill -9 -f 'com.genymobile.scrcpy.Server'")
+                        android.util.Log.i("StreamScreen", "Zombie processes killed")
+                        kotlinx.coroutines.delay(300)
+                    } catch (e: Exception) {
+                        android.util.Log.w("StreamScreen", "Failed to kill zombie processes (may be none)", e)
+                    }
+
+                    // 4. 重新启动
+                    android.util.Log.i("StreamScreen", "Starting new session with saved options...")
+                    scrcpy.start(lastOptions)
+                    android.util.Log.i("StreamScreen", "Reconnect started successfully, waiting for frames...")
+                } catch (e: Exception) {
+                    android.util.Log.e("StreamScreen", "Reconnect failed: ${e.javaClass.simpleName}: ${e.message}", e)
+                    if (AppRuntime.currentReconnectAttempt >= AppRuntime.maxReconnectAttempts) {
+                        android.util.Log.w("StreamScreen", "Max reconnect attempts reached, exiting")
+                        // 清理重连计数，但保留 lastClientOptions 以便手动重试
+                        AppRuntime.currentReconnectAttempt = 0
+                        // 最后清理
+                        try {
+                            android.util.Log.i("StreamScreen", "Final cleanup: stopping scrcpy...")
+                            scrcpy.stop()
+                            kotlinx.coroutines.delay(300)
+                        } catch (stopEx: Exception) {
+                            android.util.Log.e("StreamScreen", "Error during final cleanup", stopEx)
+                        }
+                        android.util.Log.i("StreamScreen", "Exiting to menu...")
+                        onBack()
+                    } else {
+                        android.util.Log.i("StreamScreen", "Will retry in 3 seconds...")
+                        kotlinx.coroutines.delay(3000)
+                        handleReconnect?.invoke()
+                    }
+                }
+            }
+        } else {
+            android.util.Log.w("StreamScreen", "Cannot auto-reconnect: lastOptions=${lastOptions != null}, enabled=${AppRuntime.autoReconnectEnabled}, attempt=${AppRuntime.currentReconnectAttempt}")
             onBack()
         }
     }
+
+    // 移除自动退出逻辑：当 session 断开时不自动退出，让用户可以手动重连
 
     DisposableEffect(activity) {
         onDispose {
@@ -193,6 +281,7 @@ fun FullscreenControlRoute(
             }
         },
         onVideoBoundsInWindowChanged = onVideoBoundsInWindowChanged,
+        onReconnectRequested = handleReconnect,
     )
 }
 

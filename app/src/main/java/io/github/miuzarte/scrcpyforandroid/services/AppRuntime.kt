@@ -30,6 +30,12 @@ object AppRuntime {
     var currentConnectionTarget: ConnectionTarget? = null
     var currentConnectedDevice: ConnectedDeviceInfo? = null
 
+    // 自动重连支持
+    var lastClientOptions: io.github.miuzarte.scrcpyforandroid.scrcpy.ClientOptions? = null
+    var autoReconnectEnabled: Boolean = true  // 是否启用自动重连
+    var maxReconnectAttempts: Int = 3         // 最大重连尝试次数
+    var currentReconnectAttempt: Int = 0      // 当前重连尝试次数
+
     private val snackbarHostStateLock = Any()
     private val snackbarHostStateStack = mutableListOf<SnackbarHostState>()
 

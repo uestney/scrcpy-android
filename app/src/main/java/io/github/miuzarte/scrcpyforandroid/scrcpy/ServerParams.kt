@@ -51,6 +51,7 @@ data class ServerParams(
     var maxFps: String, // float to be parsed by the server
     var angle: String, // float to be parsed by the server
 
+    var timeLimit: Tick,           // 0 = 无限制（防止息屏后服务器退出）
     var screenOffTimeout: Tick,
 
     var captureOrientation: Orientation,
@@ -154,6 +155,9 @@ data class ServerParams(
         if (maxFps.isNotBlank()) {
             validate(maxFps)
             cmd.add("max_fps=${maxFps.trim()}")
+        }
+        if (timeLimit.value > 0) {
+            cmd.add("time_limit=${timeLimit.ms}")
         }
         if (angle.isNotBlank()) {
             validate(angle)

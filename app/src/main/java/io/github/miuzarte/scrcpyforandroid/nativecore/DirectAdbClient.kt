@@ -587,7 +587,7 @@ internal class DirectAdbConnection(
         socket.tcpNoDelay = true
         socket.keepAlive = true
         socket.soTimeout = 60_000
-        rawIn = BufferedInputStream(socket.getInputStream(), 65_536)
+        rawIn = BufferedInputStream(socket.getInputStream(), 8192)
         rawOut = socket.getOutputStream()
 
         sendMsg(A_CNXN, VERSION, MAX_PAYLOAD, "host::\u0000".toByteArray(Charsets.UTF_8))
@@ -646,7 +646,7 @@ internal class DirectAdbConnection(
             .createSocket(socket, host, port, true) as SSLSocket
         sslSocket.startHandshake()
         tlsSocket = sslSocket
-        rawIn = BufferedInputStream(sslSocket.inputStream, 65_536)
+        rawIn = BufferedInputStream(sslSocket.inputStream, 8192)
         rawOut = sslSocket.outputStream
     }
 

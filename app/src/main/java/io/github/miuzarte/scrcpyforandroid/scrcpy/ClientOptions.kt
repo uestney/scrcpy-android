@@ -111,7 +111,9 @@ data class ClientOptions(
     // var videoBuffer: Tick,
     // var audioBuffer: Tick,
     // var audioOutputBuffer: Tick,
-    // var timeLimit: Tick,
+
+    // --time-limit (0 = 无限制，防止息屏后服务器退出)
+    var timeLimit: Tick = Tick(0), // to server
 
     // --screen-off-timeout
     var screenOffTimeout: Tick = Tick(-1), // to server
@@ -209,6 +211,13 @@ data class ClientOptions(
     var vdDestroyContent: Boolean = true, // to server
     // --no-vd-system-decorations
     var vdSystemDecorations: Boolean = true, // to server
+
+    // UDP 模式：使用 UDP 传输替代 ADB TCP
+    var udpMode: Boolean = false,
+    // UDP 视频端口（服务端发送）
+    var udpVideoPort: Int = 5004,
+    // UDP 控制端口（服务端监听）
+    var udpControlPort: Int = 5005,
 ) {
     enum class KeyInjectMode(val string: String) {
         MIXED("mixed"),
@@ -566,6 +575,7 @@ data class ClientOptions(
             audioBitRate = audioBitRate,
             maxFps = maxFps,
             angle = angle,
+            timeLimit = timeLimit,
             screenOffTimeout = screenOffTimeout,
             captureOrientation = captureOrientation,
             captureOrientationLock = captureOrientationLock,

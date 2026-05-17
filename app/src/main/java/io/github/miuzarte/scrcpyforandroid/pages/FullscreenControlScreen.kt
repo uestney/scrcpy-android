@@ -51,6 +51,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.github.miuzarte.scrcpyforandroid.NativeCoreFacade
 import io.github.miuzarte.scrcpyforandroid.R
 import io.github.miuzarte.scrcpyforandroid.constants.UiSpacing
@@ -88,13 +91,19 @@ fun FullscreenControlScreen(
     isInPip: Boolean,
     onVideoSizeChanged: (width: Int, height: Int) -> Unit,
     onVideoBoundsInWindowChanged: (Rect?) -> Unit,
+    onReconnectRequested: (() -> Unit)? = null, // 自动重连请求回调
 ) {
     val activity = LocalActivity.current
     val context = LocalContext.current
     val snackbarController = LocalSnackbarController.current
     val fragmentActivity = remember(activity) { activity as? FragmentActivity }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
     val taskScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
+
+    // 自动重连状态
+    var isReconnecting by remember { mutableStateOf(false) }
+    var lastConnectedSessionId by remember { mutableStateOf<String?>(null) }
 
     val currentSession by scrcpy.currentSessionState.collectAsState()
     val listingsRefreshBusy by scrcpy.listings.refreshBusyState.collectAsState()
@@ -256,9 +265,95 @@ fun FullscreenControlScreen(
         }
     }
 
+    // 生命周期监听 - onResume 时强制重连（解决息屏后连接断开问题）
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            Log.d("FullscreenControl_Lifecycle", "Lifecycle event: $event, isReconnecting=$isReconnecting, lastSessionId=$lastConnectedSessionId")
+            // 当从后台恢复到前台时，检查连接状态并重连
+            if (event == Lifecycle.Event.ON_RESUME && !isReconnecting) {
+                // 检查连接是否存活
+                val connectionAlive = scrcpy.isConnectionAlive()
+                val hasSession = currentSession != null
+                Log.i("FullscreenControlScreen", "onResume: connectionAlive=$connectionAlive, hasSession=$hasSession")
+
+                // 如果连接可能断开（超过5秒无数据）或没有session，则重连
+                if (!connectionAlive || !hasSession) {
+                    Log.w("FullscreenControlScreen", "onResume: Connection may be dead, forcing reconnect")
+                    isReconnecting = true
+                    taskScope.launch {
+                        delay(500) // 短暂延迟
+                        Log.d("FullscreenControlScreen", "onResume: Calling reconnect callback")
+                        onReconnectRequested?.invoke()
+                    }
+                } else {
+                    Log.i("FullscreenControlScreen", "onResume: Connection is alive, no reconnect needed")
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     LaunchedEffect(currentSession?.width, currentSession?.height) {
         val session = currentSession ?: return@LaunchedEffect
         onVideoSizeChanged(session.width, session.height)
+    }
+
+    // 自动重连：检测连接断开后请求重连（仅在非重连状态下）
+    LaunchedEffect(currentSession) {
+        val session = currentSession
+        if (session == null && lastConnectedSessionId != null && !isReconnecting) {
+            if (onReconnectRequested != null) {
+                Log.i("FullscreenControlScreen", "Connection lost, requesting auto-reconnect")
+                isReconnecting = true
+                delay(2000) // 等待 2 秒后重连
+                onReconnectRequested()
+            }
+        } else if (session != null && !isReconnecting) {
+            // 记录当前连接的 session 标识
+            lastConnectedSessionId = "${session.width}x${session.height}"
+        }
+    }
+
+    // 重连完成后重置状态
+    LaunchedEffect(currentSession, isReconnecting) {
+        val session = currentSession
+        if (session != null && isReconnecting) {
+            Log.i("FullscreenControlScreen", "Reconnected successfully, resetting reconnect state and attempt count")
+            isReconnecting = false
+            lastConnectedSessionId = "${session.width}x${session.height}"
+            // 重置重连计数
+            AppRuntime.currentReconnectAttempt = 0
+        }
+    }
+
+    // 超时重试：如果重连超时，再次触发重连
+    LaunchedEffect(isReconnecting) {
+        if (isReconnecting) {
+            delay(10000) // 10秒超时
+            if (isReconnecting && currentSession == null) {
+                Log.w("FullscreenControlScreen", "Reconnect timeout, retrying...")
+                // 保持 isReconnecting 状态，再次触发重连
+                onReconnectRequested?.invoke()
+            }
+        }
+    }
+
+    // UDP 模式：等待 Surface 准备好后启动视频接收器
+    val udpVideoReceiver = scrcpy.getUdpVideoReceiver()
+    if (udpVideoReceiver != null) {
+        LaunchedEffect(currentSession, udpVideoReceiver) {
+            val session = currentSession ?: return@LaunchedEffect
+            Log.i("FullscreenControlScreen", "UDP mode: waiting for surface...")
+            // 等待 NativeCoreFacade 注册 Surface
+            delay(500)
+            // 通过反射获取 NativeCoreFacade 的当前 Surface
+            // 或者使用一个回调机制
+            Log.i("FullscreenControlScreen", "UDP mode: starting video receiver")
+            udpVideoReceiver.start()
+        }
     }
 
     DisposableEffect(Unit) {
@@ -411,7 +506,30 @@ fun FullscreenControlScreen(
                 .fillMaxSize()
                 .padding(contentPadding),
         ) {
-            val session = currentSession ?: return@Box
+            val session = currentSession
+
+            // 连接断开时显示提示
+            if (session == null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = if (isReconnecting) "连接断开，正在重连..." else "连接已断开",
+                            color = Color.White,
+                            fontSize = 18.sp
+                        )
+                    }
+                }
+                return@Box
+            }
+
             FullscreenControlPage(
                 scrcpy = scrcpy,
                 session = session,

@@ -6,6 +6,7 @@ import android.content.res.Configuration
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.content.edit
@@ -68,13 +69,20 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        Log.d("MainActivity_Lifecycle", "onPause: app going to background")
+    }
+
     override fun onResume() {
         super.onResume()
+        Log.d("MainActivity_Lifecycle", "onResume: app coming to foreground")
         applyMainOrientationPolicy()
         StreamActivity.dismissActivePictureInPicture()
     }
 
     override fun onDestroy() {
+        Log.d("MainActivity_Lifecycle", "onDestroy: app being destroyed")
         AppScreenOn.unregister(window)
         super.onDestroy()
     }
