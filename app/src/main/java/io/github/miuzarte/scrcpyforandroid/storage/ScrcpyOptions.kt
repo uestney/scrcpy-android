@@ -161,7 +161,7 @@ class ScrcpyOptions(context: Context) : Settings(context, "ScrcpyOptions") {
         )
         val UDP_MODE = Pair(
             booleanPreferencesKey("udp_mode"),
-            false,  // 默认关闭 UDP（实验性功能）
+            true,  // 默认使用 UDP
         )
         val FULLSCREEN = Pair(
             booleanPreferencesKey("fullscreen"),

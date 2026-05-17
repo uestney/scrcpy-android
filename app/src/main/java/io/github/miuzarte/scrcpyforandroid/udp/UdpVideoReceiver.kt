@@ -23,7 +23,7 @@ import java.nio.ByteBuffer
  */
 class UdpVideoReceiver(
     private val serverIp: String,
-    private val videoPort: Int = 5004,
+    private val videoPort: Int = 15004,  // 默认高位端口
     private val width: Int = 1280,
     private val height: Int = 720,
 ) {
@@ -31,6 +31,7 @@ class UdpVideoReceiver(
     private var decoder: MediaCodec? = null
     private var surface: android.view.Surface? = null
     private var isRunning = false
+    private var surfaceReady = false  // Surface 是否已设置
 
     companion object {
         private const val TAG = "UdpVideoReceiver"
@@ -46,6 +47,22 @@ class UdpVideoReceiver(
      */
     fun setSurface(surface: android.view.Surface) {
         this.surface = surface
+        this.surfaceReady = true
+        Log.i(TAG, "Surface set, ready to configure decoder")
+        // 如果解码器已创建但未配置，重新配置
+        decoder?.let {
+            if (it.outputFormat == null) {
+                try {
+                    val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height)
+                    format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                    it.configure(format, surface, null, 0)
+                    it.start()
+                    Log.i(TAG, "Decoder configured with Surface")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to configure decoder with Surface", e)
+                }
+            }
+        }
     }
 
     /**
@@ -59,9 +76,22 @@ class UdpVideoReceiver(
 
         try {
             // 创建 UDP socket
-            socket = DatagramSocket(videoPort)
+            socket = DatagramSocket(null)
+            socket?.reuseAddress = true
+            socket?.bind(java.net.InetSocketAddress(videoPort))
             socket?.soTimeout = 5000 // 5 秒超时
             Log.i(TAG, "UDP socket bound to port $videoPort")
+
+            // 等待 Surface 设置（最多等待 3 秒）
+            var waited = 0
+            while (!surfaceReady && waited < 30) {
+                Thread.sleep(100)
+                waited++
+            }
+
+            if (!surfaceReady) {
+                Log.w(TAG, "Surface not ready after 3 seconds, decoder will not work")
+            }
 
             // 创建 H.264 解码器
             createDecoder()
@@ -71,7 +101,7 @@ class UdpVideoReceiver(
             // 启动接收线程
             Thread { receiveLoop() }.start()
 
-            Log.i(TAG, "UdpVideoReceiver started")
+            Log.i(TAG, "UdpVideoReceiver started (surfaceReady=$surfaceReady)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start", e)
             stop()
@@ -113,11 +143,14 @@ class UdpVideoReceiver(
 
         decoder = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
 
-        surface?.let { decoder?.configure(format, it, null, 0) }
-            ?: Log.w(TAG, "No surface set, decoder not configured")
-
-        decoder?.start()
-        Log.i(TAG, "H.264 decoder created")
+        if (surfaceReady && surface != null && surface!!.isValid) {
+            decoder?.configure(format, surface, null, 0)
+            decoder?.start()
+            Log.i(TAG, "H.264 decoder created and configured with Surface")
+        } else {
+            // Surface 未就绪，创建解码器但不配置（等待 Surface 设置后配置）
+            Log.w(TAG, "H.264 decoder created but NOT configured (Surface not ready)")
+        }
     }
 
     /**

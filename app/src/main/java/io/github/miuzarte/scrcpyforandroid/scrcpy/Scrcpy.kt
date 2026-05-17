@@ -267,33 +267,21 @@ class Scrcpy(
             isRunning = true
             startClipboardSync()
 
-            // UDP 模式：启动控制发送器
+            // Setup video consumer (notify NativeCoreFacade to setup decoders)
+            // 始终初始化原生视频管道（UDP 模式也用 TCP 传输视频，控制走 UDP）
+            if (options.video) {
+                NativeCoreFacade.onScrcpySessionStarted(info, session)
+            }
+
+            // UDP 模式：创建 UDP 控制发送器（控制事件走 UDP）
             if (options.udpMode && options.control) {
-                Log.i(TAG, "start(): UDP mode, starting UdpControlSender")
+                Log.i(TAG, "start(): UDP mode enabled, creating UdpControlSender")
                 val controlSender = io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender(
                     serverIp = info.host,
                     controlPort = options.udpControlPort,
                 )
                 udpControlSender = controlSender
                 controlSender.connect()
-            }
-
-            // Setup video consumer (notify NativeCoreFacade to setup decoders)
-            if (options.video) {
-                if (options.udpMode) {
-                    // UDP 模式：启动 UDP 视频接收器
-                    Log.i(TAG, "start(): UDP mode enabled, starting UdpVideoReceiver")
-                    val receiver = io.github.miuzarte.scrcpyforandroid.udp.UdpVideoReceiver(
-                        serverIp = info.host,
-                        videoPort = options.udpVideoPort,
-                        width = info.width,
-                        height = info.height,
-                    )
-                    udpVideoReceiver = receiver
-                    // 稍后在 Surface 准备好后启动接收器
-                } else {
-                    NativeCoreFacade.onScrcpySessionStarted(info, session)
-                }
             }
 
             // Setup audio player

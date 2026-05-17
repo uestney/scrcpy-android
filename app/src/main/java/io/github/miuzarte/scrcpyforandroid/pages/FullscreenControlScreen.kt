@@ -341,20 +341,8 @@ fun FullscreenControlScreen(
         }
     }
 
-    // UDP 模式：等待 Surface 准备好后启动视频接收器
-    val udpVideoReceiver = scrcpy.getUdpVideoReceiver()
-    if (udpVideoReceiver != null) {
-        LaunchedEffect(currentSession, udpVideoReceiver) {
-            val session = currentSession ?: return@LaunchedEffect
-            Log.i("FullscreenControlScreen", "UDP mode: waiting for surface...")
-            // 等待 NativeCoreFacade 注册 Surface
-            delay(500)
-            // 通过反射获取 NativeCoreFacade 的当前 Surface
-            // 或者使用一个回调机制
-            Log.i("FullscreenControlScreen", "UDP mode: starting video receiver")
-            udpVideoReceiver.start()
-        }
-    }
+    // Note: UDP 模式目前使用 TCP 传输视频，仅控制信号走 UDP
+    // 视频接收器代码暂时禁用，等待服务端 UDP 推流完善后再启用
 
     DisposableEffect(Unit) {
         val listener: (Float) -> Unit = { fps ->
