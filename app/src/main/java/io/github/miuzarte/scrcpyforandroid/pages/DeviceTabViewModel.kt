@@ -619,7 +619,8 @@ internal class DeviceTabViewModel(
         logEvent(
             "scrcpy 已启动: device=${session.deviceName}, video=$videoDetail, audio=$audioDetail, " +
                     "control=${resolvedOptions.control}, turnScreenOff=${resolvedOptions.turnScreenOff}, " +
-                    "maxSize=${resolvedOptions.maxSize}, maxFps=${resolvedOptions.maxFps}"
+                    "maxSize=${resolvedOptions.maxSize}, maxFps=${resolvedOptions.maxFps}, " +
+                    "audioInjection=${resolvedOptions.audioInjection}"
         )
         AppRuntime.snackbar(
             if (resolvedOptions.recordFilename.isNotBlank()) R.string.vm_scrcpy_started_recording

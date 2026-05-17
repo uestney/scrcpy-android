@@ -291,16 +291,21 @@ class Scrcpy(
             // Audio IN 先启动（在 Audio OUT 之前，避免音频硬件冲突）
             audioInjector?.stop()
             audioInjector = null
+            Log.i(TAG, "start(): audioInjection=${options.audioInjection}, host=${currentTarget?.host}")
             if (options.audioInjection) {
                 val injectorHost = currentTarget?.host
                 if (injectorHost != null) {
                     Log.i(TAG, "start(): starting AudioInjector BEFORE audio player")
-                    val injector = AudioInjector()
+                    logEvent("Audio IN: 正在启动麦克风注入... host=$injectorHost")
+                    val injector = AudioInjector { logMsg -> logEvent(logMsg) }
                     audioInjector = injector
                     injector.start(injectorHost)
                 } else {
                     Log.w(TAG, "start(): AudioInjector skipped, host is null")
+                    logEvent("Audio IN: 启动失败 - host 为 null")
                 }
+            } else {
+                logEvent("Audio IN: 已禁用 (audioInjection=false)")
             }
 
             // Audio OUT（在 Audio IN 之后启动）

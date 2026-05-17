@@ -10,7 +10,7 @@ import java.io.DataOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 
-class AudioInjector {
+class AudioInjector(private val onLog: ((String) -> Unit)? = null) {
 
     companion object {
         private const val TAG         = "AudioInjector"
@@ -33,10 +33,12 @@ class AudioInjector {
 
         Thread({
             try {
+                onLog?.invoke("Audio IN: 正在初始化麦克风...")
                 // 1. 初始化麦克风
                 val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CFG, AUDIO_FMT)
                 if (minBuf <= 0) {
                     Log.e(TAG, "getMinBufferSize=$minBuf")
+                    onLog?.invoke("Audio IN: 麦克风初始化失败 (getMinBufferSize=$minBuf)")
                     return@Thread
                 }
                 val rec = AudioRecord(
@@ -46,18 +48,22 @@ class AudioInjector {
                 )
                 if (rec.state != AudioRecord.STATE_INITIALIZED) {
                     Log.e(TAG, "AudioRecord not initialized")
+                    onLog?.invoke("Audio IN: 麦克风初始化失败 (state=${rec.state})")
                     rec.release()
                     return@Thread
                 }
                 audioRecord = rec
+                onLog?.invoke("Audio IN: 麦克风初始化成功")
 
                 // 2. 连接 TCP
+                onLog?.invoke("Audio IN: 正在连接 $deviceHost:$PORT ...")
                 socket = Socket()
                 socket!!.connect(InetSocketAddress(deviceHost, PORT), 5000)
                 socket!!.tcpNoDelay = true
                 socket!!.sendBufferSize = 1024
                 output = DataOutputStream(socket!!.getOutputStream())
                 Log.i(TAG, "TCP connected: $deviceHost:$PORT")
+                onLog?.invoke("Audio IN: TCP 连接成功！")
 
                 // 3. 尝试 Opus 编码，失败自动回退 PCM
                 val opusResult = tryInitOpus()
@@ -65,9 +71,11 @@ class AudioInjector {
 
                 rec.startRecording()
                 capturing = true
+                onLog?.invoke("Audio IN: 开始采集并发送音频...")
 
                 if (opusResult != null) {
                     Log.i(TAG, "Opus mode")
+                    onLog?.invoke("Audio IN: Opus 编码模式 (24kbps)")
                     val (enc, csdList) = opusResult
                     // 发送 Opus 握手
                     out.writeInt(0x4F505553)  // "OPUS"
@@ -80,12 +88,15 @@ class AudioInjector {
                     opusLoop(rec, enc, out)
                 } else {
                     Log.i(TAG, "PCM fallback mode")
+                    onLog?.invoke("Audio IN: PCM 直传模式 (回退)")
                     pcmLoop(rec, out)
                 }
 
             } catch (e: Exception) {
                 Log.e(TAG, "Error: ${e.message}", e)
+                onLog?.invoke("Audio IN: 错误 - ${e.message}")
             } finally {
+                onLog?.invoke("Audio IN: 已停止")
                 stop()
             }
         }, "AudioInjector").start()
@@ -175,10 +186,28 @@ class AudioInjector {
         val byteBuf = ByteArray(FRAME_SIZE * 2)
         val info    = MediaCodec.BufferInfo()
         var frameCount = 0
+        var silentFrames = 0  // 静音帧计数
 
         while (capturing) {
             val n = rec.read(pcmBuf, 0, FRAME_SIZE)
-            if (n <= 0) break
+            if (n <= 0) {
+                Log.w(TAG, "[Opus] read returned $n, exiting")
+                onLog?.invoke("Audio IN: 麦克风读取失败 (n=$n)")
+                break
+            }
+
+            // 检测是否是静音
+            val amp = (0 until n).maxOfOrNull { kotlin.math.abs(pcmBuf[it].toInt()) } ?: 0
+            if (amp < 100) {
+                silentFrames++
+            } else {
+                silentFrames = 0
+            }
+            if (silentFrames > 50) {
+                Log.w(TAG, "[Opus] too many silent frames ($silentFrames), stopping")
+                onLog?.invoke("Audio IN: 检测到静音，停止采集")
+                break
+            }
 
             val len = n * 2
             for (i in 0 until n) {
@@ -216,8 +245,9 @@ class AudioInjector {
 
                 enc.releaseOutputBuffer(outIdx, false)
                 frameCount++
-                if (frameCount % 250 == 0) {
-                    Log.i(TAG, "[Opus] #$frameCount (${info.size}B)")
+                if (frameCount % 50 == 0) {
+                    Log.i(TAG, "[Opus] #$frameCount (${info.size}B) amp=$amp")
+                    onLog?.invoke("Audio IN: 已发送 $frameCount 帧 (振幅=$amp)")
                 }
             }
         }
