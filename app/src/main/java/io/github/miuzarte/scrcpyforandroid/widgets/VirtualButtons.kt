@@ -97,12 +97,6 @@ enum class VirtualButtonAction(
         MiuixIcons.More,
         null
     ),
-    MINIMIZE(
-        "minimize",
-        R.string.vb_return_to_host,
-        Icons.Rounded.PhoneAndroid,
-        null
-    ),
     HOME(
         "home",
         R.string.vb_home,
@@ -191,6 +185,12 @@ enum class VirtualButtonAction(
         "paste_local_clipboard",
         R.string.vb_paste_clipboard,
         Icons.Rounded.ContentPaste,
+        null
+    ),
+    MINIMIZE(
+        "minimize",
+        R.string.vb_return_to_host,
+        Icons.Rounded.PhoneAndroid,
         null
     );
 }
