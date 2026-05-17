@@ -949,6 +949,17 @@ internal fun ScrcpyAllOptionsPage(
                     },
                     enabled = soBundle.audio,
                 )
+                SwitchPreference(
+                    title = stringResource(R.string.scrcpyopt_audio_injection),
+                    summary = "Audio IN: 手机麦克风 → 虚拟设备",
+                    checked = soBundle.audioInjection,
+                    onCheckedChange = {
+                        soBundle = soBundle.copy(
+                            audioInjection = it
+                        )
+                    },
+                    enabled = soBundle.audio,
+                )
                 SuperSlider(
                     title = stringResource(R.string.scrcpyopt_screen_off_timeout),
                     summary = "--screen-off-timeout",

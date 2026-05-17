@@ -179,6 +179,10 @@ class ScrcpyOptions(context: Context) : Settings(context, "ScrcpyOptions") {
             booleanPreferencesKey("audio_playback"),
             true,
         )
+        val AUDIO_INJECTION = Pair(  // Audio IN: 手机麦克风 → 虚拟设备
+            booleanPreferencesKey("audio_injection"),
+            true,  // 默认启用
+        )
         val TURN_SCREEN_OFF = Pair(
             booleanPreferencesKey("turn_screen_off"),
             false,
@@ -318,6 +322,7 @@ class ScrcpyOptions(context: Context) : Settings(context, "ScrcpyOptions") {
             control = CONTROL.defaultValue,
             videoPlayback = VIDEO_PLAYBACK.defaultValue,
             audioPlayback = AUDIO_PLAYBACK.defaultValue,
+            audioInjection = AUDIO_INJECTION.defaultValue,
             turnScreenOff = TURN_SCREEN_OFF.defaultValue,
             keyInjectMode = KEY_INJECT_MODE.defaultValue,
             forwardKeyRepeat = FORWARD_KEY_REPEAT.defaultValue,
@@ -385,6 +390,7 @@ class ScrcpyOptions(context: Context) : Settings(context, "ScrcpyOptions") {
         val control: Boolean,
         val videoPlayback: Boolean,
         val audioPlayback: Boolean,
+        val audioInjection: Boolean,  // Audio IN: 手机麦克风 → 虚拟设备
         val turnScreenOff: Boolean,
         val keyInjectMode: String,
         val forwardKeyRepeat: Boolean,
@@ -451,6 +457,7 @@ class ScrcpyOptions(context: Context) : Settings(context, "ScrcpyOptions") {
         bundleField(CONTROL) { it.control },
         bundleField(VIDEO_PLAYBACK) { it.videoPlayback },
         bundleField(AUDIO_PLAYBACK) { it.audioPlayback },
+        bundleField(AUDIO_INJECTION) { it.audioInjection },
         bundleField(TURN_SCREEN_OFF) { it.turnScreenOff },
         bundleField(KEY_INJECT_MODE) { it.keyInjectMode },
         bundleField(FORWARD_KEY_REPEAT) { it.forwardKeyRepeat },
@@ -517,6 +524,7 @@ class ScrcpyOptions(context: Context) : Settings(context, "ScrcpyOptions") {
         control = preferences.read(CONTROL),
         videoPlayback = preferences.read(VIDEO_PLAYBACK),
         audioPlayback = preferences.read(AUDIO_PLAYBACK),
+        audioInjection = preferences.read(AUDIO_INJECTION),
         turnScreenOff = preferences.read(TURN_SCREEN_OFF),
         keyInjectMode = preferences.read(KEY_INJECT_MODE),
         forwardKeyRepeat = preferences.read(FORWARD_KEY_REPEAT),
@@ -598,6 +606,7 @@ class ScrcpyOptions(context: Context) : Settings(context, "ScrcpyOptions") {
         control = bundle.control,
         videoPlayback = bundle.videoPlayback,
         audioPlayback = bundle.audioPlayback,
+        audioInjection = bundle.audioInjection,  // Audio IN: 手机麦克风 → 虚拟设备
         turnScreenOff = bundle.turnScreenOff,
         keyInjectMode = KeyInjectMode.fromString(bundle.keyInjectMode),
         forwardKeyRepeat = bundle.forwardKeyRepeat,

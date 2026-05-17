@@ -471,6 +471,7 @@
     <string name="scrcpyopt_no_video_playback">Disable video playback on the computer</string>
     <string name="scrcpyopt_no_audio">Disable audio forwarding</string>
     <string name="scrcpyopt_no_audio_playback">Disable audio playback on the computer</string>
+    <string name="scrcpyopt_audio_injection">Inject microphone audio to device</string>
     <string name="scrcpyopt_screen_off_timeout">Controlled device\'s screen-off timeout after scrcpy starts</string>
     <string name="scrcpyopt_no_power_on">Do not power on the device on start</string>
     <string name="scrcpyopt_power_off_on_close">Turn the device screen off when closing scrcpy</string>

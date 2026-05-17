@@ -471,6 +471,7 @@
     <string name="scrcpyopt_no_video_playback">仅转发不播放视频</string>
     <string name="scrcpyopt_no_audio">禁用音频</string>
     <string name="scrcpyopt_no_audio_playback">仅转发不播放</string>
+    <string name="scrcpyopt_audio_injection">麦克风注入（手机→设备）</string>
     <string name="scrcpyopt_screen_off_timeout">scrcpy 启动后受控机的息屏时间</string>
     <string name="scrcpyopt_no_power_on">scrcpy 启动时不唤醒屏幕</string>
     <string name="scrcpyopt_power_off_on_close">scrcpy 结束后息屏</string>
