@@ -113,7 +113,7 @@ class ScrcpyOptions(context: Context) : Settings(context, "ScrcpyOptions") {
         )
         val VIDEO_BIT_RATE = Pair(
             intPreferencesKey("video_bit_rate"),
-            4000000,  // 4Mbps - 降低延迟
+            2000000,  // 2Mbps - 更低延迟，适合弱网
         )
         val AUDIO_BIT_RATE = Pair(
             intPreferencesKey("audio_bit_rate"),
@@ -121,7 +121,7 @@ class ScrcpyOptions(context: Context) : Settings(context, "ScrcpyOptions") {
         )
         val MAX_FPS = Pair(
             stringPreferencesKey("max_fps"),
-            "30",  // 30fps - 降低延迟
+            "15",  // 15fps - 平衡性能和延迟
         )
         val ANGLE = Pair(
             stringPreferencesKey("angle"),
