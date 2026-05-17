@@ -262,6 +262,7 @@ class Scrcpy(
                 audioPlayback = options.audioPlayback,
                 keyInjectMode = options.keyInjectMode,
                 forwardKeyRepeat = options.forwardKeyRepeat,
+                udpMode = options.udpMode,
             )
             isRunning = true
             startClipboardSync()
@@ -1835,6 +1836,7 @@ class Scrcpy(
             val forwardKeyRepeat: Boolean = true,
             val host: String = "",
             val port: Int = Defaults.ADB_PORT,
+            val udpMode: Boolean = false,  // UDP 传输模式
         )
 
         data class VideoPacket(

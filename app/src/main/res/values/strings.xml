@@ -476,6 +476,10 @@
     <string name="scrcpyopt_stay_awake">Keep the device on while scrcpy is running, when the device is plugged in</string>
     <string name="scrcpyopt_show_touches">Enable \"show touches\" on start, restore the initial value on exit</string>
     <string name="scrcpyopt_fullscreen">Start in fullscreen</string>
+    <string name="scrcpyopt_udp_mode">UDP Video Mode (Low Latency)</string>
+    <string name="scrcpyopt_udp_mode_summary">Use UDP for video transmission instead of TCP. Lower latency but may be less stable.</string>
+    <string name="stream_mode_udp">UDP Mode (Low Latency)</string>
+    <string name="stream_mode_tcp">TCP Mode (Stable)</string>
     <string name="scrcpyopt_disable_screensaver">Disable screensaver while scrcpy is running</string>
     <string name="scrcpyopt_disable_screensaver_note">Be aware of burn-in; this also affects picture-in-picture</string>
     <string name="scrcpyopt_kill_adb_on_close">Kill adb when scrcpy terminates</string>

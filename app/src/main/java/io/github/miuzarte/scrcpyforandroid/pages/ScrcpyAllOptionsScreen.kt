@@ -1038,6 +1038,16 @@ internal fun ScrcpyAllOptionsPage(
                     },
                 )
                 SwitchPreference(
+                    title = stringResource(R.string.scrcpyopt_udp_mode),
+                    summary = stringResource(R.string.scrcpyopt_udp_mode_summary),
+                    checked = soBundle.udpMode,
+                    onCheckedChange = {
+                        soBundle = soBundle.copy(
+                            udpMode = it
+                        )
+                    },
+                )
+                SwitchPreference(
                     title = stringResource(R.string.scrcpyopt_disable_screensaver),
                     summary = "--disable-screensaver",
                     checked = soBundle.disableScreensaver,
