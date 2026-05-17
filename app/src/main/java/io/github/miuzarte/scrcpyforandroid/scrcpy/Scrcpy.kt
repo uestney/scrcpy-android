@@ -268,21 +268,15 @@ class Scrcpy(
             startClipboardSync()
 
             // Setup video consumer (notify NativeCoreFacade to setup decoders)
-            // 始终初始化原生视频管道（UDP 模式也用 TCP 传输视频，控制走 UDP）
+            // 混合模式：视频和控制都走 TCP（服务端 UDP 控制接收器未部署）
             if (options.video) {
                 NativeCoreFacade.onScrcpySessionStarted(info, session)
             }
 
-            // UDP 模式：创建 UDP 控制发送器（控制事件走 UDP）
-            if (options.udpMode && options.control) {
-                Log.i(TAG, "start(): UDP mode enabled, creating UdpControlSender")
-                val controlSender = io.github.miuzarte.scrcpyforandroid.udp.UdpControlSender(
-                    serverIp = info.host,
-                    controlPort = options.udpControlPort,
-                )
-                udpControlSender = controlSender
-                controlSender.connect()
-            }
+            // UDP 控制暂时禁用（等待服务端 udp-control-server.sh 部署）
+            // udpControlSender 创建跳过，控制通过正常 scrcpy 通道
+            Log.i(TAG, "UDP control disabled, using TCP control (mixed mode)")
+
 
             // Setup audio player
             audioPlayer?.release()
