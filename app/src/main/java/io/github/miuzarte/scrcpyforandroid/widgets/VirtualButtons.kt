@@ -97,6 +97,12 @@ enum class VirtualButtonAction(
         MiuixIcons.More,
         null
     ),
+    MINIMIZE(
+        "minimize",
+        R.string.vb_return_to_host,
+        Icons.Rounded.PhoneAndroid,
+        null
+    ),
     HOME(
         "home",
         R.string.vb_home,
@@ -167,12 +173,6 @@ enum class VirtualButtonAction(
         "all_apps",
         R.string.vb_all_apps,
         Icons.Rounded.Apps,
-        null
-    ),
-    MINIMIZE(
-        "minimize",
-        R.string.vb_return_to_host,
-        Icons.Rounded.PhoneAndroid,
         null
     ),
     RECENT_TASKS(
