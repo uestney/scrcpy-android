@@ -1709,25 +1709,10 @@ class Scrcpy(
         private var controlHeartbeatThread: Thread? = null
 
         private fun startControlHeartbeatThread(session: ActiveSession) {
-            val controlWriter = session.controlWriter ?: return
-            controlHeartbeatThread = thread(start = true, name = "scrcpy-control-heartbeat") {
-                Log.d(TAG, "[CONTROL_HEARTBEAT] Thread started")
-                try {
-                    while (activeSession === session && !session.controlStream?.closed!!) {
-                        Thread.sleep(10000) // 每 10 秒发送一次心跳
-                        try {
-                            // 发送一个空的剪贴板同步消息作为心跳（不会影响实际剪贴板内容）
-                            controlWriter.setClipboard("", false)
-                            Log.d(TAG, "[CONTROL_HEARTBEAT] Heartbeat sent")
-                        } catch (e: Exception) {
-                            Log.w(TAG, "[CONTROL_HEARTBEAT] Failed to send heartbeat", e)
-                            break
-                        }
-                    }
-                } finally {
-                    Log.d(TAG, "[CONTROL_HEARTBEAT] Thread exiting")
-                }
-            }
+            // 心跳已禁用：原方案每 10 秒发送空 setClipboard 保活，会导致
+            // scrcpy-server 反复 log "Device clipboard set"，且 FRP/TCP 默认
+            // 已有 keepalive，无需应用层心跳。如未来公网遇到 NAT 超时再恢复。
+            val _unused = session
         }
 
         private fun startServerLogThread(

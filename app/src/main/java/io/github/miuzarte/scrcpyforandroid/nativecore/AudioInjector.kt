@@ -60,7 +60,10 @@ class AudioInjector(private val onLog: ((String) -> Unit)? = null) {
                 socket = Socket()
                 socket!!.connect(InetSocketAddress(deviceHost, PORT), 5000)
                 socket!!.tcpNoDelay = true
-                socket!!.sendBufferSize = 1024
+                // 注意：不要手动设置 sendBufferSize。
+                // 历史上曾设为 1024 想压低延迟，但在公网/移动网络（RTT 50-150ms）下
+                // 这个超小缓冲会把 TCP BDP 钉死，导致 slow start 起不来、write 阻塞，
+                // 局域网正常但移动网络完全发不出去。交给 OS 自动调优即可。
                 output = DataOutputStream(socket!!.getOutputStream())
                 Log.i(TAG, "TCP connected: $deviceHost:$PORT")
                 onLog?.invoke("Audio IN: TCP 连接成功！")
@@ -186,7 +189,6 @@ class AudioInjector(private val onLog: ((String) -> Unit)? = null) {
         val byteBuf = ByteArray(FRAME_SIZE * 2)
         val info    = MediaCodec.BufferInfo()
         var frameCount = 0
-        var silentFrames = 0  // 静音帧计数
 
         while (capturing) {
             val n = rec.read(pcmBuf, 0, FRAME_SIZE)
@@ -196,18 +198,8 @@ class AudioInjector(private val onLog: ((String) -> Unit)? = null) {
                 break
             }
 
-            // 检测是否是静音
+            // 仅用于日志：当前帧最大振幅（不再因静音自动停止）
             val amp = (0 until n).maxOfOrNull { kotlin.math.abs(pcmBuf[it].toInt()) } ?: 0
-            if (amp < 100) {
-                silentFrames++
-            } else {
-                silentFrames = 0
-            }
-            if (silentFrames > 50) {
-                Log.w(TAG, "[Opus] too many silent frames ($silentFrames), stopping")
-                onLog?.invoke("Audio IN: 检测到静音，停止采集")
-                break
-            }
 
             val len = n * 2
             for (i in 0 until n) {
