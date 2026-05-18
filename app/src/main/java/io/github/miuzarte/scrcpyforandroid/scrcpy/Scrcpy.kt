@@ -170,7 +170,7 @@ class Scrcpy(
 
     companion object {
         private const val TAG = "Scrcpy"
-        private const val AUDIO_PORT = 7008
+        private const val AUDIO_PORT = 59152
 
         const val DEFAULT_SERVER_ASSET = "bin/scrcpy-server-v3.3.4"
         const val DEFAULT_SERVER_ASSET_NAME = "scrcpy-server-v3.3.4"
