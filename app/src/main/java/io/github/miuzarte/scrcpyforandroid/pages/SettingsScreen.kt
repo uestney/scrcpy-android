@@ -724,6 +724,16 @@ fun SettingsPage(
                         )
                     },
                 )
+                SwitchPreference(
+                    title = stringResource(R.string.pref_title_fullscreen_fill_cutout),
+                    summary = stringResource(R.string.pref_summary_fullscreen_fill_cutout),
+                    checked = asBundle.fullscreenFillCutout,
+                    onCheckedChange = {
+                        asBundle = asBundle.copy(
+                            fullscreenFillCutout = it
+                        )
+                    },
+                )
             }
         }
 

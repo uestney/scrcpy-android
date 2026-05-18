@@ -41,6 +41,25 @@ object NativeCoreFacade {
     @Volatile
     private var currentSessionInfo: Scrcpy.Session.SessionInfo? = null
 
+    /** 可见诊断日志回调（由 Scrcpy.kt 在 udpMode 启动时设置，指向文本框 logEvent）。 */
+    @Volatile
+    var statusLogger: ((String) -> Unit)? = null
+    @Volatile
+    private var feedExternalKey = 0L
+    @Volatile
+    private var feedExternalCfg = 0L
+    @Volatile
+    private var feedExternalNonkey = 0L
+    @Volatile
+    private var feedExternalCachedKey = 0L
+    @Volatile
+    private var feedExternalCachedCfg = 0L
+
+    private fun pushStatus(msg: String) {
+        Log.i(TAG, msg)
+        statusLogger?.let { runCatching { it(msg) } }
+    }
+
     suspend fun close() {
         sessionLifecycleMutex.withLock {
             releaseAllDecoders()
@@ -192,6 +211,80 @@ object NativeCoreFacade {
     }
 
     /**
+     * UDP 视频路径专用入口：跳过 sessionMgr.attachVideoConsumer 的 TCP reader，
+     * 只把 session info 锁定 + decoder 配好，等外部（UdpVideoReceiver）通过
+     * feedAnnexBExternal() 直接喂包。
+     */
+    suspend fun onScrcpyUdpSessionStarted(
+        session: Scrcpy.Session.SessionInfo
+    ) = sessionLifecycleMutex.withLock {
+        currentSessionInfo = session
+        releaseAllDecoders()
+        synchronized(bootstrapLock) {
+            bootstrapPackets.clear()
+            latestConfigPacket = null
+        }
+        feedExternalKey = 0; feedExternalCfg = 0; feedExternalNonkey = 0
+        feedExternalCachedKey = 0; feedExternalCachedCfg = 0
+        pushStatus("onScrcpyUdpSessionStarted(): session=${session.width}x${session.height} " +
+                "codec=${session.codec?.string} surface=${activeSurfaceId} rec=$recordingSurfaceAttached")
+        if (activeSurfaceId != null || recordingSurfaceAttached) {
+            pushStatus("onScrcpyUdpSessionStarted(): bind decoder to persistent surface")
+            createOrReplaceDecoder(session)
+        } else {
+            pushStatus("onScrcpyUdpSessionStarted(): NO SURFACE attached yet — decoder will be created when surface attaches")
+        }
+        packetCount = 0
+    }
+
+    /**
+     * 由 UdpVideoReceiver 通过 Scrcpy.kt 转发调用，把 RTP 重组后的 Annex-B 喂解码器。
+     * 包格式与 AnnexBDecoder.feedAnnexB 完全一致：
+     *   - isConfig=true 表示 SPS+PPS 配置包
+     *   - isKey=true   表示包含 IDR 的关键帧
+     */
+    fun feedAnnexBExternal(data: ByteArray, ptsUs: Long, isKey: Boolean, isConfig: Boolean) {
+        val currentDecoder = decoder
+        if (currentDecoder == null) {
+            // decoder 还没建好（surface 还没 attach），缓存到 bootstrap 队列以便切回时回放
+            if (isConfig) feedExternalCachedCfg += 1
+            if (isKey) feedExternalCachedKey += 1
+            if (isConfig || isKey || feedExternalCachedCfg + feedExternalCachedKey <= 2L) {
+                pushStatus("UDP decoder: NO_DECODER, cached key=$isKey cfg=$isConfig size=${data.size} " +
+                        "(cachedCfg=$feedExternalCachedCfg cachedKey=$feedExternalCachedKey)")
+            }
+            cacheBootstrapPacket(
+                Scrcpy.Session.VideoPacket(
+                    data = data, ptsUs = ptsUs, isConfig = isConfig, isKeyFrame = isKey
+                )
+            )
+            return
+        }
+        if (isConfig) feedExternalCfg += 1
+        if (isKey) feedExternalKey += 1
+        if (!isConfig && !isKey) feedExternalNonkey += 1
+        if (isConfig && feedExternalCfg <= 2L) {
+            pushStatus("UDP decoder: feed CONFIG #$feedExternalCfg size=${data.size}")
+        }
+        if (isKey && feedExternalKey <= 2L) {
+            pushStatus("UDP decoder: feed IDR #$feedExternalKey size=${data.size}")
+        }
+        if (feedExternalNonkey == 1L || feedExternalNonkey % 120L == 0L) {
+            pushStatus("UDP decoder: fed=cfg:$feedExternalCfg/key:$feedExternalKey/p:$feedExternalNonkey")
+        }
+        packetCount += 1
+        if (packetCount == 1L || packetCount % 120L == 0L || isConfig) {
+            Log.i(
+                TAG,
+                "feedAnnexBExternal(): packets=$packetCount key=$isKey cfg=$isConfig size=${data.size}"
+            )
+        }
+        runCatching {
+            currentDecoder.feedAnnexB(data, ptsUs, isKey, isConfig)
+        }
+    }
+
+    /**
      * Called by Scrcpy.kt when a session stops.
      * Cleans up decoders and resets state.
      */
@@ -250,12 +343,9 @@ object NativeCoreFacade {
         val surface = renderer.getDecoderSurface()
         decoder?.release()
         decoder = null
-        Log.i(
-            TAG,
-            "createOrReplaceDecoder(): " +
-                    "codec=${session.codec?.string ?: "null"}, " +
-                    "size=${session.width}x${session.height}, " +
-                    "persistent=true"
+        pushStatus(
+            "createOrReplaceDecoder(): codec=${session.codec?.string ?: "null"} " +
+                    "size=${session.width}x${session.height} surfaceValid=${surface.isValid}"
         )
         val newDecoder = AnnexBDecoder(
             width = session.width,
@@ -300,7 +390,9 @@ object NativeCoreFacade {
         if (snapshot.isEmpty()) {
             return
         }
-        Log.i(TAG, "replayBootstrapPackets(): count=${snapshot.size}")
+        val cfgN = snapshot.count { it.isConfig }
+        val keyN = snapshot.count { it.isKeyFrame }
+        pushStatus("replayBootstrapPackets(): total=${snapshot.size} cfg=$cfgN key=$keyN")
         snapshot.forEach { packet ->
             runCatching {
                 decoder.feedAnnexB(packet.data, packet.ptsUs, packet.isKeyFrame, packet.isConfig)

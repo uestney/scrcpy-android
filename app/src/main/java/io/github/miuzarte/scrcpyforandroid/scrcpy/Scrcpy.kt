@@ -270,7 +270,38 @@ class Scrcpy(
             // Setup video consumer (notify NativeCoreFacade to setup decoders)
             // 混合模式：视频和控制都走 TCP（服务端 UDP 控制接收器未部署）
             if (options.video) {
-                NativeCoreFacade.onScrcpySessionStarted(info, session)
+                if (options.udpMode) {
+                    // UDP/RTP 视频路径（Step 1.3）
+                    //   - decoder/surface 仍由 NativeCoreFacade 管理
+                    //   - 视频源换成 UdpVideoReceiver（监听 udpVideoPort）
+                    //   - TCP scrcpy 的视频流仍存在但被忽略（不 attachVideoConsumer）
+                    NativeCoreFacade.statusLogger = { msg -> logEvent(msg) }
+                    NativeCoreFacade.onScrcpyUdpSessionStarted(info)
+                    val rx = io.github.miuzarte.scrcpyforandroid.udp.UdpVideoReceiver(
+                        videoPort  = options.udpVideoPort,
+                        onPacket   = { data, pts, key, cfg ->
+                            NativeCoreFacade.feedAnnexBExternal(data, pts, key, cfg)
+                        },
+                        onPacketReceived = {
+                            videoPacketCount++
+                            lastVideoPacketTime = System.currentTimeMillis()
+                            isConnectionAlive   = true
+                        },
+                        onIdrLost  = {
+                            // TODO Step 1.3.x: 通过 TCP 控制信道发 TYPE_RESET_VIDEO 请求 IDR
+                            Log.w(TAG, "UDP video: IDR loss reported")
+                        },
+                        serverHost = currentTarget?.host,
+                        helloPort  = 59155,
+                        onStatus   = { msg -> logEvent(msg) },
+                    )
+                    udpVideoReceiver = rx
+                    backgroundScope.launch { rx.start() }
+                    logEvent("UDP video: receiver started port=${options.udpVideoPort} server=${currentTarget?.host}")
+                    Log.i(TAG, "UDP video receiver started on port=${options.udpVideoPort}, server=${currentTarget?.host}")
+                } else {
+                    NativeCoreFacade.onScrcpySessionStarted(info, session)
+                }
             }
 
             // UDP 控制暂时禁用（等待服务端 udp-control-server.sh 部署）

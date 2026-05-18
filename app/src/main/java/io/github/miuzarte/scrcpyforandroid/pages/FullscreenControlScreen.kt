@@ -4,9 +4,11 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Rect
 import android.hardware.display.DisplayManager
+import android.os.Build
 import android.util.Log
 import android.view.KeyEvent
 import android.view.Surface
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.background
@@ -245,7 +247,7 @@ fun FullscreenControlScreen(
     var showAllAppsSheet by rememberSaveable { mutableStateOf(false) }
     var imeRequestToken by rememberSaveable { mutableIntStateOf(0) }
 
-    DisposableEffect(activity) {
+    DisposableEffect(activity, asBundle.fullscreenFillCutout) {
         val window = activity?.window
         if (window != null) {
             WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -253,6 +255,18 @@ fun FullscreenControlScreen(
             controller.hide(WindowInsetsCompat.Type.systemBars())
             controller.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val lp = window.attributes
+                lp.layoutInDisplayCutoutMode = if (asBundle.fullscreenFillCutout) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                    else
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                } else {
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                }
+                window.attributes = lp
+            }
         }
         onDispose {
             val restoreWindow = activity?.window
@@ -261,6 +275,12 @@ fun FullscreenControlScreen(
                     WindowInsetsCompat.Type.systemBars()
                 )
                 WindowCompat.setDecorFitsSystemWindows(restoreWindow, true)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    val lp = restoreWindow.attributes
+                    lp.layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                    restoreWindow.attributes = lp
+                }
             }
         }
     }

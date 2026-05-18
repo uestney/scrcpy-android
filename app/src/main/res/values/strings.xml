@@ -197,6 +197,8 @@
     <string name="pref_title_floating_button_ring_opacity">Floating button ring opacity</string>
     <string name="pref_title_fullscreen_compat_mode">Fullscreen compatibility mode</string>
     <string name="pref_summary_fullscreen_compat_mode">When enabled, the fullscreen control page no longer spans Activities; Picture-in-Picture will be unavailable</string>
+    <string name="pref_title_fullscreen_fill_cutout">Fill display cutout</string>
+    <string name="pref_summary_fullscreen_fill_cutout">Extend content into the notch/punch-hole area in fullscreen. On some phones, you may also need to allow this app under System Settings → Apps → Full screen display.</string>
 
     <!-- Settings - scrcpy-server -->
     <string name="section_scrcpy_server">scrcpy-server</string>

@@ -197,6 +197,8 @@
     <string name="pref_title_floating_button_ring_opacity">悬浮球白环透明度</string>
     <string name="pref_title_fullscreen_compat_mode">全屏兼容模式</string>
     <string name="pref_summary_fullscreen_compat_mode">启用后全屏控制页不再跨 Activity，会导致画中画不可用</string>
+    <string name="pref_title_fullscreen_fill_cutout">沉浸刘海/打孔屏</string>
+    <string name="pref_summary_fullscreen_fill_cutout">全屏时画面延伸到刘海/挖孔区域。部分手机还需在系统设置→应用→全屏显示中允许本应用</string>
 
     <!-- Settings - scrcpy-server -->
     <string name="section_scrcpy_server">scrcpy-server</string>

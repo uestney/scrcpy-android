@@ -6,112 +6,192 @@ import android.media.MediaCodec
 import android.media.MediaFormat
 import android.media.MediaRecorder
 import android.util.Log
+import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 
+/**
+ * AudioInjector v3（按需录音）
+ *
+ * 协议：
+ *   1. 连接 → 待命（不开麦克风）
+ *   2. 收到 server 发来的 STRT → 初始化麦克风/Opus 编码器 → 发 OPUS 握手 → 进入采集循环
+ *   3. 收到 STOP（或采集出错）→ 释放麦克风和编码器 → 回到待命
+ *   4. 一直循环直到 stop() 被调用或 socket 断开
+ *
+ * 后台 control reader 线程持续读 4 字节命令，主线程根据 sessionWanted 状态切换。
+ */
 class AudioInjector(private val onLog: ((String) -> Unit)? = null) {
 
     companion object {
-        private const val TAG         = "AudioInjector"
-        private const val PORT        = 59152
-        private const val SAMPLE_RATE = 16000
-        private const val CHANNEL_CFG = AudioFormat.CHANNEL_IN_MONO
-        private const val AUDIO_FMT   = AudioFormat.ENCODING_PCM_16BIT
+        private const val TAG          = "AudioInjector"
+        private const val PORT         = 59152
+        private const val SAMPLE_RATE  = 16000
+        private const val CHANNEL_CFG  = AudioFormat.CHANNEL_IN_MONO
+        private const val AUDIO_FMT    = AudioFormat.ENCODING_PCM_16BIT
         private const val OPUS_BITRATE = 24000
-        private const val FRAME_SIZE  = SAMPLE_RATE / 50  // 320 samples = 20ms
+        private const val FRAME_SIZE   = SAMPLE_RATE / 50  // 320 samples = 20ms
+
+        private const val OPUS_MAGIC = 0x4F505553   // "OPUS"
+        private const val CMD_STRT   = 0x53545254   // "STRT"
+        private const val CMD_STOP   = 0x53544F50   // "STOP"
     }
 
-    private var audioRecord: AudioRecord?     = null
-    private var socket:     Socket?           = null
-    private var output:     DataOutputStream? = null
-    private var encoder:    MediaCodec?       = null
-    @Volatile private var capturing = false
+    private var socket:      Socket?           = null
+    private var audioRecord: AudioRecord?      = null
+    private var encoder:     MediaCodec?       = null
+
+    @Volatile private var running       = false   // 外部生命周期（stop() 之前一直 true）
+    @Volatile private var capturing     = false   // 当前 TCP 连接是否活动
+    @Volatile private var sessionWanted = false   // server 是否要求采集中
+
+    // ---------- public API ----------
 
     fun start(deviceHost: String) {
-        if (capturing) return
+        if (running) return
+        running = true
 
         Thread({
-            try {
-                onLog?.invoke("Audio IN: 正在初始化麦克风...")
-                // 1. 初始化麦克风
-                val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CFG, AUDIO_FMT)
-                if (minBuf <= 0) {
-                    Log.e(TAG, "getMinBufferSize=$minBuf")
-                    onLog?.invoke("Audio IN: 麦克风初始化失败 (getMinBufferSize=$minBuf)")
-                    return@Thread
-                }
-                val rec = AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
-                    SAMPLE_RATE, CHANNEL_CFG, AUDIO_FMT,
-                    Math.max(minBuf, 8192)
-                )
-                if (rec.state != AudioRecord.STATE_INITIALIZED) {
-                    Log.e(TAG, "AudioRecord not initialized")
-                    onLog?.invoke("Audio IN: 麦克风初始化失败 (state=${rec.state})")
-                    rec.release()
-                    return@Thread
-                }
-                audioRecord = rec
-                onLog?.invoke("Audio IN: 麦克风初始化成功")
-
-                // 2. 连接 TCP
-                onLog?.invoke("Audio IN: 正在连接 $deviceHost:$PORT ...")
-                socket = Socket()
-                socket!!.connect(InetSocketAddress(deviceHost, PORT), 5000)
-                socket!!.tcpNoDelay = true
-                // 注意：不要手动设置 sendBufferSize。
-                // 历史上曾设为 1024 想压低延迟，但在公网/移动网络（RTT 50-150ms）下
-                // 这个超小缓冲会把 TCP BDP 钉死，导致 slow start 起不来、write 阻塞，
-                // 局域网正常但移动网络完全发不出去。交给 OS 自动调优即可。
-                output = DataOutputStream(socket!!.getOutputStream())
-                Log.i(TAG, "TCP connected: $deviceHost:$PORT")
-                onLog?.invoke("Audio IN: TCP 连接成功！")
-
-                // 3. 尝试 Opus 编码，失败自动回退 PCM
-                val opusResult = tryInitOpus()
-                val out = output!!
-
-                rec.startRecording()
-                capturing = true
-                onLog?.invoke("Audio IN: 开始采集并发送音频...")
-
-                if (opusResult != null) {
-                    Log.i(TAG, "Opus mode")
-                    onLog?.invoke("Audio IN: Opus 编码模式 (24kbps)")
-                    val (enc, csdList) = opusResult
-                    // 发送 Opus 握手
-                    out.writeInt(0x4F505553)  // "OPUS"
-                    out.writeInt(csdList.size)
-                    for (csd in csdList) {
-                        out.writeInt(csd.size)
-                        out.write(csd)
-                    }
-                    out.flush()
-                    opusLoop(rec, enc, out)
+            // 重连循环：socket 断了就重连，直到 stop() 把 running 置 false
+            var attempt = 0
+            while (running) {
+                attempt++
+                val connected = runOneConnection(deviceHost, attempt)
+                if (!running) break
+                if (!connected) {
+                    // 连不上 — 退避后重试
+                    val backoffMs = (1000L * Math.min(attempt, 5))   // 1s, 2s, 3s, 4s, 5s 封顶
+                    onLog?.invoke("Audio IN: 连接失败，${backoffMs}ms 后重连")
+                    try { Thread.sleep(backoffMs) } catch (_: InterruptedException) { break }
                 } else {
-                    Log.i(TAG, "PCM fallback mode")
-                    onLog?.invoke("Audio IN: PCM 直传模式 (回退)")
-                    pcmLoop(rec, out)
+                    // 之前连上过又断了 — 短暂等待后立即重连
+                    onLog?.invoke("Audio IN: 连接中断，重连中…")
+                    try { Thread.sleep(500) } catch (_: InterruptedException) { break }
                 }
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Error: ${e.message}", e)
-                onLog?.invoke("Audio IN: 错误 - ${e.message}")
-            } finally {
-                onLog?.invoke("Audio IN: 已停止")
-                stop()
             }
+            onLog?.invoke("Audio IN: 已停止")
         }, "AudioInjector").start()
     }
 
-    // ---------- Opus 初始化（返回 null 表示失败） ----------
+    /** 单次 TCP 连接的完整生命：返回 true 表示曾连上过，false 表示连接都没建起来 */
+    private fun runOneConnection(deviceHost: String, attempt: Int): Boolean {
+        var input:  DataInputStream?  = null
+        var output: DataOutputStream? = null
+        var sock:   Socket?           = null
+        var connected = false
+        try {
+            onLog?.invoke("Audio IN: 连接 $deviceHost:$PORT (#$attempt) …")
+            sock = Socket()
+            sock.connect(InetSocketAddress(deviceHost, PORT), 5000)
+            sock.tcpNoDelay = true
+            // 注意：不要手动设置 sendBufferSize（公网会出问题）
+            input  = DataInputStream(sock.getInputStream())
+            output = DataOutputStream(sock.getOutputStream())
+            socket    = sock
+            connected = true
+            Log.i(TAG, "TCP connected: $deviceHost:$PORT")
+            onLog?.invoke("Audio IN: 已连接，待命（等 redroid 应用请求录音）")
 
-    private data class OpusInit(val enc: MediaCodec, val csd: List<ByteArray>)
+            capturing     = true
+            sessionWanted = false
 
-    private fun tryInitOpus(): OpusInit? {
-        return try {
-            val enc = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_OPUS)
+            startControlReader(input)
+
+            while (capturing && running) {
+                while (capturing && running && !sessionWanted) {
+                    Thread.sleep(50)
+                }
+                if (!capturing || !running) break
+
+                runOneSession(output)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "connection error: ${e.message}")
+            if (!connected) onLog?.invoke("Audio IN: 连接错误 - ${e.message}")
+        } finally {
+            capturing     = false
+            sessionWanted = false
+            try { audioRecord?.stop() }    catch (_: Exception) {}
+            try { audioRecord?.release() } catch (_: Exception) {}
+            audioRecord = null
+            try { encoder?.stop() }    catch (_: Exception) {}
+            try { encoder?.release() } catch (_: Exception) {}
+            encoder = null
+            try { sock?.close() } catch (_: Exception) {}
+            socket = null
+        }
+        return connected
+    }
+
+    fun stop() {
+        running       = false
+        capturing     = false
+        sessionWanted = false
+        try { audioRecord?.stop() }    catch (_: Exception) {}
+        try { audioRecord?.release() } catch (_: Exception) {}
+        audioRecord = null
+        try { encoder?.stop() }    catch (_: Exception) {}
+        try { encoder?.release() } catch (_: Exception) {}
+        encoder = null
+        try { socket?.close() } catch (_: Exception) {}
+        socket = null
+    }
+
+    // ---------- 控制通道读线程 ----------
+
+    private fun startControlReader(input: DataInputStream) {
+        Thread({
+            try {
+                while (capturing) {
+                    val cmd = input.readInt()
+                    when (cmd) {
+                        CMD_STRT -> {
+                            Log.i(TAG, "[CTRL] STRT received")
+                            onLog?.invoke("Audio IN: redroid 请求录音，开始采集")
+                            sessionWanted = true
+                        }
+                        CMD_STOP -> {
+                            Log.i(TAG, "[CTRL] STOP received")
+                            onLog?.invoke("Audio IN: redroid 停止录音，待命")
+                            sessionWanted = false
+                        }
+                        else -> Log.w(TAG, "[CTRL] unknown cmd: 0x${cmd.toString(16)}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "[CTRL] reader exit: ${e.message}")
+                capturing     = false
+                sessionWanted = false
+            }
+        }, "AudioInjector-ctrl").start()
+    }
+
+    // ---------- 一次录音会话 ----------
+
+    private fun runOneSession(out: DataOutputStream) {
+        var rec: AudioRecord? = null
+        var enc: MediaCodec?  = null
+        try {
+            // 1. 麦克风
+            val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CFG, AUDIO_FMT)
+            if (minBuf <= 0) {
+                Log.e(TAG, "getMinBufferSize=$minBuf")
+                return
+            }
+            rec = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                SAMPLE_RATE, CHANNEL_CFG, AUDIO_FMT,
+                Math.max(minBuf, 8192)
+            )
+            if (rec.state != AudioRecord.STATE_INITIALIZED) {
+                Log.e(TAG, "AudioRecord init failed: state=${rec.state}")
+                return
+            }
+            audioRecord = rec
+
+            // 2. Opus 编码器 + 提取 CSD
+            enc = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_OPUS)
             val fmt = MediaFormat.createAudioFormat(
                 MediaFormat.MIMETYPE_AUDIO_OPUS, SAMPLE_RATE, 1)
             fmt.setInteger(MediaFormat.KEY_BIT_RATE, OPUS_BITRATE)
@@ -122,28 +202,106 @@ class AudioInjector(private val onLog: ((String) -> Unit)? = null) {
 
             val csdList = extractCsd(enc)
             if (csdList.isEmpty()) {
-                Log.e(TAG, "CSD extraction failed, falling back to PCM")
-                enc.stop()
-                enc.release()
-                encoder = null
-                return null
+                Log.e(TAG, "CSD extraction failed")
+                return
             }
             Log.i(TAG, "CSD: ${csdList.size} entries, sizes=${csdList.map { it.size }}")
-            OpusInit(enc, csdList)
+
+            // 3. 发握手
+            out.writeInt(OPUS_MAGIC)
+            out.writeInt(csdList.size)
+            for (csd in csdList) {
+                out.writeInt(csd.size)
+                out.write(csd)
+            }
+            out.flush()
+
+            // 4. 开始采集
+            rec.startRecording()
+            captureLoop(rec, enc, out)
         } catch (e: Exception) {
-            Log.w(TAG, "Opus unavailable: ${e.message}, falling back to PCM")
-            try { encoder?.release() } catch (_: Exception) {}
-            encoder = null
-            null
+            Log.e(TAG, "session error: ${e.message}", e)
+        } finally {
+            try { rec?.stop() }    catch (_: Exception) {}
+            try { rec?.release() } catch (_: Exception) {}
+            try { enc?.stop() }    catch (_: Exception) {}
+            try { enc?.release() } catch (_: Exception) {}
+            audioRecord = null
+            encoder     = null
+            Log.i(TAG, "session cleanup done")
         }
     }
 
-    private fun extractCsd(enc: MediaCodec): List<ByteArray> {
-        val result = mutableListOf<ByteArray>()
+    private fun captureLoop(rec: AudioRecord, enc: MediaCodec, out: DataOutputStream) {
+        val pcmBuf  = ShortArray(FRAME_SIZE)
+        val byteBuf = ByteArray(FRAME_SIZE * 2)
+        val info    = MediaCodec.BufferInfo()
+        var frameCount = 0
 
-        // 送静音帧触发编码器初始化
+        while (capturing && sessionWanted) {
+            val n = rec.read(pcmBuf, 0, FRAME_SIZE)
+            if (n <= 0) {
+                Log.w(TAG, "[Opus] read returned $n, exit session")
+                break
+            }
+
+            // 仅作日志：当前帧最大振幅
+            val amp = (0 until n).maxOfOrNull { kotlin.math.abs(pcmBuf[it].toInt()) } ?: 0
+
+            val len = n * 2
+            for (i in 0 until n) {
+                byteBuf[i * 2]     = (pcmBuf[i].toInt() and 0xFF).toByte()
+                byteBuf[i * 2 + 1] = (pcmBuf[i].toInt() shr 8).toByte()
+            }
+
+            val inIdx = enc.dequeueInputBuffer(10000)
+            if (inIdx >= 0) {
+                val inBuf = enc.getInputBuffer(inIdx)
+                inBuf!!.clear()
+                inBuf.put(byteBuf, 0, len)
+                enc.queueInputBuffer(inIdx, 0, len, frameCount * 20000L, 0)
+            }
+
+            while (capturing && sessionWanted) {
+                val outIdx = enc.dequeueOutputBuffer(info, 0)
+                if (outIdx < 0) break
+
+                if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                    enc.releaseOutputBuffer(outIdx, false)
+                    continue
+                }
+
+                val encBuf = enc.getOutputBuffer(outIdx)!!
+                val data = ByteArray(info.size)
+                encBuf.position(info.offset)
+                encBuf.get(data)
+
+                try {
+                    out.writeInt(info.size)
+                    out.write(data)
+                    out.flush()
+                } catch (e: Exception) {
+                    Log.e(TAG, "[Opus] send error: ${e.message}")
+                    capturing = false
+                    enc.releaseOutputBuffer(outIdx, false)
+                    return
+                }
+
+                enc.releaseOutputBuffer(outIdx, false)
+                frameCount++
+                if (frameCount % 50 == 0) {
+                    Log.i(TAG, "[Opus] #$frameCount (${info.size}B) amp=$amp")
+                    onLog?.invoke("Audio IN: 已发送 $frameCount 帧 (amp=$amp)")
+                }
+            }
+        }
+        Log.i(TAG, "[Opus] session ended, frames=$frameCount")
+    }
+
+    private fun extractCsd(enc: MediaCodec): List<ByteArray> {
+        val result  = mutableListOf<ByteArray>()
         val silence = ByteArray(FRAME_SIZE * 2)
-        val inIdx = enc.dequeueInputBuffer(100000)
+        val inIdx   = enc.dequeueInputBuffer(100000)
         if (inIdx >= 0) {
             val buf = enc.getInputBuffer(inIdx)
             buf!!.clear()
@@ -153,7 +311,7 @@ class AudioInjector(private val onLog: ((String) -> Unit)? = null) {
 
         val info = MediaCodec.BufferInfo()
         var gotFormat = false
-        val deadline = System.nanoTime() + 1_000_000_000L  // 1s
+        val deadline  = System.nanoTime() + 1_000_000_000L  // 1s
 
         while (System.nanoTime() < deadline && result.isEmpty()) {
             val idx = enc.dequeueOutputBuffer(info, 10000)
@@ -180,117 +338,5 @@ class AudioInjector(private val onLog: ((String) -> Unit)? = null) {
             }
         }
         return result
-    }
-
-    // ---------- Opus 编码循环 ----------
-
-    private fun opusLoop(rec: AudioRecord, enc: MediaCodec, out: DataOutputStream) {
-        val pcmBuf  = ShortArray(FRAME_SIZE)
-        val byteBuf = ByteArray(FRAME_SIZE * 2)
-        val info    = MediaCodec.BufferInfo()
-        var frameCount = 0
-
-        while (capturing) {
-            val n = rec.read(pcmBuf, 0, FRAME_SIZE)
-            if (n <= 0) {
-                Log.w(TAG, "[Opus] read returned $n, exiting")
-                onLog?.invoke("Audio IN: 麦克风读取失败 (n=$n)")
-                break
-            }
-
-            // 仅用于日志：当前帧最大振幅（不再因静音自动停止）
-            val amp = (0 until n).maxOfOrNull { kotlin.math.abs(pcmBuf[it].toInt()) } ?: 0
-
-            val len = n * 2
-            for (i in 0 until n) {
-                byteBuf[i * 2]     = (pcmBuf[i].toInt() and 0xFF).toByte()
-                byteBuf[i * 2 + 1] = (pcmBuf[i].toInt() shr 8).toByte()
-            }
-
-            // 送入编码器
-            val inIdx = enc.dequeueInputBuffer(10000)
-            if (inIdx >= 0) {
-                val inBuf = enc.getInputBuffer(inIdx)
-                inBuf!!.clear()
-                inBuf.put(byteBuf, 0, len)
-                enc.queueInputBuffer(inIdx, 0, len, frameCount * 20000L, 0)
-            }
-
-            // 排空编码器输出
-            while (capturing) {
-                val outIdx = enc.dequeueOutputBuffer(info, 0)
-                if (outIdx < 0) break
-
-                if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-                    enc.releaseOutputBuffer(outIdx, false)
-                    continue
-                }
-
-                val encBuf = enc.getOutputBuffer(outIdx)!!
-                val data = ByteArray(info.size)
-                encBuf.position(info.offset)
-                encBuf.get(data)
-
-                out.writeInt(info.size)
-                out.write(data)
-                out.flush()
-
-                enc.releaseOutputBuffer(outIdx, false)
-                frameCount++
-                if (frameCount % 50 == 0) {
-                    Log.i(TAG, "[Opus] #$frameCount (${info.size}B) amp=$amp")
-                    onLog?.invoke("Audio IN: 已发送 $frameCount 帧 (振幅=$amp)")
-                }
-            }
-        }
-        Log.i(TAG, "[Opus] ended, frames=$frameCount")
-    }
-
-    // ---------- PCM 直传循环（回退模式） ----------
-
-    private fun pcmLoop(rec: AudioRecord, out: DataOutputStream) {
-        val buffer  = ShortArray(FRAME_SIZE)
-        val byteBuf = ByteArray(FRAME_SIZE * 2)
-        var count   = 0
-
-        while (capturing) {
-            val n = rec.read(buffer, 0, FRAME_SIZE)
-            if (n <= 0) break
-
-            try {
-                val len = n * 2
-                for (i in 0 until n) {
-                    byteBuf[i * 2]     = (buffer[i].toInt() and 0xFF).toByte()
-                    byteBuf[i * 2 + 1] = (buffer[i].toInt() shr 8).toByte()
-                }
-                out.writeInt(len)
-                out.write(byteBuf, 0, len)
-                out.flush()
-                count++
-                if (count % 250 == 0) {
-                    Log.i(TAG, "[PCM] #$count")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "[PCM] send error: ${e.message}")
-                break
-            }
-        }
-        Log.i(TAG, "[PCM] ended, sent=$count")
-    }
-
-    // ---------- cleanup ----------
-
-    fun stop() {
-        capturing = false
-        try { audioRecord?.stop() }    catch (_: Exception) {}
-        try { audioRecord?.release() } catch (_: Exception) {}
-        audioRecord = null
-        try { encoder?.stop() }    catch (_: Exception) {}
-        try { encoder?.release() } catch (_: Exception) {}
-        encoder = null
-        try { output?.close() } catch (_: Exception) {}
-        try { socket?.close() }  catch (_: Exception) {}
-        socket  = null
-        output  = null
     }
 }
